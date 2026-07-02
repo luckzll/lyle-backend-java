@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.KnowledgeFileMapper">
+
+    <select id="selectByKnowledgeBaseId" resultType="com.example.aiapp.domain.entity.KnowledgeFileEntity">
+        SELECT
+            id,
+            knowledge_base_id,
+            file_name,
+            storage_path,
+            parse_status,
+            created_at
+        FROM knowledge_file
+        WHERE knowledge_base_id = #{knowledgeBaseId}
+        ORDER BY created_at DESC
+    </select>
+
+    <select id="selectByIdAndKnowledgeBaseId" resultType="com.example.aiapp.domain.entity.KnowledgeFileEntity">
+        SELECT
+            id,
+            knowledge_base_id,
+            file_name,
+            storage_path,
+            parse_status,
+            created_at
+        FROM knowledge_file
+        WHERE id = #{id}
+          AND knowledge_base_id = #{knowledgeBaseId}
+        LIMIT 1
+    </select>
+
+    <delete id="deleteByKnowledgeBaseId">
+        DELETE FROM knowledge_file
+        WHERE knowledge_base_id = #{knowledgeBaseId}
+    </delete>
+
+</mapper>

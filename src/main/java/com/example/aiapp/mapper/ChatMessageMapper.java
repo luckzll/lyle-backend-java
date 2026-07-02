@@ -1,0 +1,13 @@
+package com.example.aiapp.mapper;
+
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.example.aiapp.domain.entity.ChatMessageEntity;
+
+import java.util.List;
+
+public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
+
+    List<ChatMessageEntity> selectByConversationId(String conversationId);
+
+    int deleteByConversationId(String conversationId);
+}

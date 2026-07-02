@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+
+target/
+.mvn/wrapper/maven-wrapper.jar
+
+.idea/
+.DS_Store
+*.log
+
+*.class
+*.jar
+*.war

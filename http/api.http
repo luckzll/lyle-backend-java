@@ -1,0 +1,50 @@
+### Health
+GET http://localhost:8080/api/health
+
+### Create conversation
+POST http://localhost:8080/api/conversations
+Content-Type: application/json
+
+{
+  "title": "默认会话"
+}
+
+### List conversations
+GET http://localhost:8080/api/conversations
+
+### Create knowledge base
+POST http://localhost:8080/api/knowledge-bases
+Content-Type: application/json
+
+{
+  "name": "默认知识库"
+}
+
+### List knowledge bases
+GET http://localhost:8080/api/knowledge-bases
+
+### Upload knowledge file
+POST http://localhost:8080/api/knowledge-bases/1/files
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="demo.txt"
+Content-Type: text/plain
+
+这是一个用于测试知识库入库的文档。
+--WebAppBoundary--
+
+### Get ingest task
+GET http://localhost:8080/api/ingest/tasks/ingest-1
+
+### List knowledge files
+GET http://localhost:8080/api/knowledge-bases/1/files
+
+### Send chat message
+POST http://localhost:8080/api/chat/send
+Content-Type: application/json
+
+{
+  "message": "你好，介绍一下 Lyle AI",
+  "knowledgeBaseIds": ["1"]
+}

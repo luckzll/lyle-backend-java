@@ -1,0 +1,93 @@
+package com.example.aiapp.infrastructure.storage;
+
+import com.example.aiapp.config.MinioProperties;
+import io.minio.BucketExistsArgs;
+import io.minio.GetObjectArgs;
+import io.minio.MakeBucketArgs;
+import io.minio.MinioClient;
+import io.minio.PutObjectArgs;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+
+@Component
+public class FileStorageService {
+
+    private final MinioProperties properties;
+    private final MinioClient minioClient;
+
+    public FileStorageService(MinioProperties properties) {
+        this.properties = properties;
+        this.minioClient = MinioClient.builder()
+                .endpoint(properties.endpoint())
+                .credentials(properties.accessKey(), properties.secretKey())
+                .build();
+    }
+
+    public String upload(String bucketName, String objectName, InputStream inputStream, long size, String contentType) {
+        if (properties.enabled()) {
+            return uploadToMinio(objectName, inputStream, size, contentType);
+        }
+        Path root = Path.of(System.getProperty("user.dir")).getParent().resolve("storage");
+        Path target = root.resolve(bucketName).resolve(objectName).normalize();
+
+        try {
+            Files.createDirectories(target.getParent());
+            Files.copy(inputStream, target, StandardCopyOption.REPLACE_EXISTING);
+            return target.toUri().toString();
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to store uploaded file.", exception);
+        }
+    }
+
+    public InputStream download(String bucketName, String objectName) {
+        if (properties.enabled()) {
+            try {
+                return minioClient.getObject(GetObjectArgs.builder()
+                        .bucket(properties.bucket())
+                        .object(objectName)
+                        .build());
+            } catch (Exception exception) {
+                throw new IllegalStateException("Failed to read MinIO object.", exception);
+            }
+        }
+        Path root = Path.of(System.getProperty("user.dir")).getParent().resolve("storage");
+        Path target = root.resolve(bucketName).resolve(objectName).normalize();
+
+        try {
+            return Files.newInputStream(target);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to read stored file.", exception);
+        }
+    }
+
+    private String uploadToMinio(String objectName, InputStream inputStream, long size, String contentType) {
+        try {
+            ensureBucket();
+            minioClient.putObject(PutObjectArgs.builder()
+                    .bucket(properties.bucket())
+                    .object(objectName)
+                    .stream(inputStream, size, -1)
+                    .contentType(contentType == null ? "application/octet-stream" : contentType)
+                    .build());
+            return "s3://" + properties.bucket() + "/" + objectName;
+        } catch (Exception exception) {
+            throw new IllegalStateException("Failed to upload object to MinIO.", exception);
+        }
+    }
+
+    private void ensureBucket() throws Exception {
+        boolean exists = minioClient.bucketExists(BucketExistsArgs.builder()
+                .bucket(properties.bucket())
+                .build());
+        if (!exists) {
+            minioClient.makeBucket(MakeBucketArgs.builder()
+                    .bucket(properties.bucket())
+                    .build());
+        }
+    }
+}

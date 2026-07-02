@@ -1,0 +1,76 @@
+server:
+  port: 8080
+  error:
+    include-message: always
+  servlet:
+    context-path: /api
+
+spring:
+  config:
+    import: optional:file:.env[.properties],optional:file:backend-java/.env[.properties]
+  application:
+    name: ai-app-backend
+  mvc:
+    async:
+      request-timeout: ${SPRING_MVC_ASYNC_REQUEST_TIMEOUT:180000}
+  servlet:
+    multipart:
+      max-file-size: ${UPLOAD_MAX_FILE_SIZE:6MB}
+      max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:6MB}
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/ai_app?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
+    username: ${MYSQL_USERNAME:aiapp}
+    password: ${MYSQL_PASSWORD:aiapp}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: assign_id
+
+ai:
+  service:
+    base-url: ${AI_SERVICE_BASE_URL:http://localhost:8000}
+    internal-token: ${AI_SERVICE_INTERNAL_TOKEN:lyle-internal-dev-token-change-me}
+    max-in-memory-size: ${AI_SERVICE_MAX_IN_MEMORY_SIZE:4194304}
+
+app:
+  auth:
+    jwt-secret: ${JWT_SECRET:lyle-dev-secret-key-please-change-to-at-least-32-bytes}
+    jwt-ttl-minutes: ${JWT_TTL_MINUTES:1440}
+  redis:
+    enabled: ${REDIS_ENABLED:false}
+  minio:
+    enabled: ${MINIO_ENABLED:false}
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    bucket: ${MINIO_BUCKET:knowledge-files}
+  qdrant:
+    enabled: ${QDRANT_ENABLED:false}
+    endpoint: ${QDRANT_ENDPOINT:http://localhost:6333}
+  tos:
+    enabled: ${TOS_ENABLED:true}
+    endpoint: ${TOS_ENDPOINT:tos-cn-shanghai.volces.com}
+    region: ${TOS_REGION:cn-shanghai}
+    access-key-id: ${TOS_ACCESS_KEY_ID:}
+    secret-access-key: ${TOS_SECRET_ACCESS_KEY:}
+    bucket: ${TOS_BUCKET:common-prod-object}
+    save-path-head: ${TOS_SAVE_PATH_HEAD:zl-dev/}
+    public-url-head: ${TOS_PUBLIC_URL_HEAD:https://common-prod-object.tos-cn-shanghai.volces.com/}
+  rate-limit:
+    auth-per-minute: ${AUTH_RATE_LIMIT_PER_MINUTE:20}
+    chat-per-minute: ${CHAT_RATE_LIMIT_PER_MINUTE:60}

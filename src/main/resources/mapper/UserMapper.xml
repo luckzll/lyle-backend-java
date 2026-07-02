@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.UserMapper">
+
+    <select id="selectByUsername" resultType="com.example.aiapp.domain.entity.UserEntity">
+        SELECT
+            id,
+            username,
+            role,
+            password_hash,
+            created_at
+        FROM app_user
+        WHERE username = #{username}
+        LIMIT 1
+    </select>
+
+</mapper>
