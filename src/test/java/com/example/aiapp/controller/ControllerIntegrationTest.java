@@ -268,7 +268,7 @@ class ControllerIntegrationTest {
         when(chatService.send(eq(42L), any(ChatRequestDTO.class))).thenReturn(new ChatResponseVO(
                 "100",
                 "答案是紫藤花。",
-                List.of(new SourceVO("file-1", "lyle.txt #1", "答案是紫藤花。")),
+                List.of(new SourceVO("file-1", "lyle.txt #1", "答案是紫藤花。", "0.9", "keyword", "keyword")),
                 List.of(Map.of("agent", "rag_agent", "contextCount", 1)),
                 List.of(Map.of("tool", "memory_stats", "ok", true)),
                 List.of(Map.of("targetKey", "food_preference", "value", "西瓜", "status", "pending")),
