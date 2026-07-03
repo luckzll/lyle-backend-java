@@ -135,6 +135,67 @@ public class AiServiceClient {
                 .block();
     }
 
+    public Map<String, Object> getMemoryProfiles(String userId, String status, int limit) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/memory/{userId}/profiles")
+                        .queryParamIfPresent("status", java.util.Optional.ofNullable(status))
+                        .queryParam("limit", limit)
+                        .build(userId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getMemoryFragments(String userId, String status, String category, int limit) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/memory/{userId}/fragments")
+                        .queryParamIfPresent("status", java.util.Optional.ofNullable(status))
+                        .queryParamIfPresent("category", java.util.Optional.ofNullable(category))
+                        .queryParam("limit", limit)
+                        .build(userId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getProfileEvidence(String userId, long profileId, int limit) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/memory/{userId}/profiles/{profileId}/evidence")
+                        .queryParam("limit", limit)
+                        .build(userId, profileId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> changeProfileStatus(String userId, String schemaPath, Map<String, String> request) {
+        return aiServiceWebClient.patch()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/memory/{userId}/profiles/{schemaPath}/status")
+                        .build(userId, schemaPath))
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> changeFragmentStatus(String userId, long fragmentId, Map<String, String> request) {
+        return aiServiceWebClient.patch()
+                .uri("/ai/memory/{userId}/fragments/{fragmentId}/status", userId, fragmentId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
     public Map<String, Object> getMetrics() {
         return aiServiceWebClient.get()
                 .uri("/ai/metrics")

@@ -68,4 +68,60 @@ public class MemoryController {
     Map<String, Object> mergeSuggestions() {
         return aiServiceClient.getStructuredMemoryMergeSuggestions(String.valueOf(CurrentUserUtils.currentUserId()));
     }
+
+    @GetMapping("/profiles")
+    Map<String, Object> profiles(
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "200") int limit
+    ) {
+        return aiServiceClient.getMemoryProfiles(
+                String.valueOf(CurrentUserUtils.currentUserId()),
+                status,
+                limit
+        );
+    }
+
+    @GetMapping("/fragments")
+    Map<String, Object> fragments(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String category,
+            @RequestParam(defaultValue = "200") int limit
+    ) {
+        return aiServiceClient.getMemoryFragments(
+                String.valueOf(CurrentUserUtils.currentUserId()),
+                status,
+                category,
+                limit
+        );
+    }
+
+    @GetMapping("/profiles/{profileId}/evidence")
+    Map<String, Object> profileEvidence(
+            @PathVariable long profileId,
+            @RequestParam(defaultValue = "100") int limit
+    ) {
+        return aiServiceClient.getProfileEvidence(
+                String.valueOf(CurrentUserUtils.currentUserId()),
+                profileId,
+                limit
+        );
+    }
+
+    @PutMapping("/profiles/schema-path/{schemaPath}/status")
+    Map<String, Object> changeProfileStatus(@PathVariable String schemaPath, @RequestBody Map<String, String> request) {
+        return aiServiceClient.changeProfileStatus(
+                String.valueOf(CurrentUserUtils.currentUserId()),
+                schemaPath,
+                request
+        );
+    }
+
+    @PutMapping("/fragments/{fragmentId}/status")
+    Map<String, Object> changeFragmentStatus(@PathVariable long fragmentId, @RequestBody Map<String, String> request) {
+        return aiServiceClient.changeFragmentStatus(
+                String.valueOf(CurrentUserUtils.currentUserId()),
+                fragmentId,
+                request
+        );
+    }
 }
