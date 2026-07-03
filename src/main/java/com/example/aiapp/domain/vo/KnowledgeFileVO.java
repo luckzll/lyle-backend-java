@@ -7,6 +7,13 @@ public record KnowledgeFileVO(
         Long knowledgeBaseId,
         String fileName,
         String storagePath,
+        String storageProvider,
+        String bucket,
+        String objectKey,
+        String originalName,
+        String contentType,
+        Long fileSize,
+        String visibility,
         String parseStatus,
         LocalDateTime createdAt
 ) {

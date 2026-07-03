@@ -19,10 +19,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
@@ -31,6 +35,10 @@ public class ChatServiceImpl implements ChatService {
 
     private static final java.util.regex.Pattern DATA_IMAGE_PATTERN = java.util.regex.Pattern.compile(
             "data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\\r\\n]+"
+    );
+    private static final Pattern IMAGE_URL_PATTERN = Pattern.compile(
+            "https?://\\S+\\.(?:png|jpe?g|webp|gif)(?:\\?\\S*)?",
+            Pattern.CASE_INSENSITIVE
     );
 
     private final AiServiceClient aiServiceClient;
@@ -60,10 +68,11 @@ public class ChatServiceImpl implements ChatService {
                 : request.conversationId();
         ensureConversationOwnedByUserIfPersisted(userId, conversationId);
 
+        String aiMessage = withRecentImageContext(conversationId, request.message());
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
-                request.message(),
+                aiMessage,
                 request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds(),
                 false,
                 aiConfigService.currentConfigMap()
@@ -91,10 +100,11 @@ public class ChatServiceImpl implements ChatService {
                 : request.conversationId();
         ensureConversationOwnedByUserIfPersisted(userId, conversationId);
 
+        String aiMessage = withRecentImageContext(conversationId, request.message());
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
-                request.message(),
+                aiMessage,
                 request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds(),
                 true,
                 aiConfigService.currentConfigMap()
@@ -183,6 +193,115 @@ public class ChatServiceImpl implements ChatService {
             return "";
         }
         return DATA_IMAGE_PATTERN.matcher(content).replaceAll("[图片 data URL 已省略]");
+    }
+
+    private String withRecentImageContext(String conversationId, String message) {
+        if (StringUtils.isBlank(message) || containsImageRef(message) || !looksLikeImageFollowUp(message)) {
+            return message;
+        }
+        String imageUrl = findReferencedImageUrl(conversationId, message);
+        if (StringUtils.isBlank(imageUrl)) {
+            return message;
+        }
+        return message + "\n图片：" + imageUrl;
+    }
+
+    private boolean looksLikeImageFollowUp(String message) {
+        return List.of(
+                "这张图",
+                "图片",
+                "照片",
+                "图里",
+                "改图",
+                "修改",
+                "改一下",
+                "换背景",
+                "去掉",
+                "移除",
+                "替换"
+        ).stream().anyMatch(message::contains);
+    }
+
+    private boolean containsImageRef(String message) {
+        return message.contains("data:image/") || IMAGE_URL_PATTERN.matcher(message).find();
+    }
+
+    private String findReferencedImageUrl(String conversationId, String message) {
+        List<ImageRef> images = findRecentImageRefs(conversationId);
+        if (images.isEmpty()) {
+            return "";
+        }
+        ImageRef selected = selectImageRef(images, message);
+        return selected == null ? "" : selected.url();
+    }
+
+    private ImageRef selectImageRef(List<ImageRef> images, String message) {
+        if (images.size() == 1) {
+            return images.get(0);
+        }
+        if (message.contains("第一张") || message.contains("最早") || message.contains("那张卡通") || message.contains("卡通图")) {
+            return images.get(images.size() - 1);
+        }
+        if (message.contains("第二张") && images.size() >= 2) {
+            return images.get(images.size() - 2);
+        }
+        if (message.contains("上一张") || message.contains("上张")) {
+            ImageRef nonLatest = firstMatchingFrom(1, images, message);
+            return nonLatest == null ? images.get(Math.min(1, images.size() - 1)) : nonLatest;
+        }
+        ImageRef semantic = firstMatchingFrom(0, images, message);
+        return semantic == null ? images.get(0) : semantic;
+    }
+
+    private ImageRef firstMatchingFrom(int startIndex, List<ImageRef> images, String message) {
+        for (int index = startIndex; index < images.size(); index++) {
+            ImageRef image = images.get(index);
+            String content = image.context();
+            if (message.contains("卡通") && containsAny(content, "卡通", "动画", "小孩", "写代码", "电脑")) {
+                return image;
+            }
+            if ((message.contains("人像") || message.contains("真人") || message.contains("女生"))
+                    && containsAny(content, "人像", "真人", "女生", "照片", "公园")) {
+                return image;
+            }
+        }
+        return null;
+    }
+
+    private boolean containsAny(String text, String... keywords) {
+        for (String keyword : keywords) {
+            if (text.contains(keyword)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<ImageRef> findRecentImageRefs(String conversationId) {
+        List<ChatMessageEntity> messages = chatMessageMapper.selectByConversationId(conversationId);
+        List<ImageRef> images = new ArrayList<>();
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            String content = messages.get(index).getContent();
+            if (StringUtils.isBlank(content)) {
+                continue;
+            }
+            Matcher matcher = IMAGE_URL_PATTERN.matcher(content);
+            List<String> urls = new ArrayList<>();
+            while (matcher.find()) {
+                urls.add(matcher.group(0).replaceAll("[，。,.!！)）]+$", ""));
+            }
+            Collections.reverse(urls);
+            for (String url : urls) {
+                images.add(new ImageRef(url, content));
+                if (images.size() >= 8) {
+                    return images;
+                }
+            }
+        }
+        return images;
+    }
+
+    private record ImageRef(String url, String context) {
     }
 
     private void touchConversation(String conversationId) {

@@ -8,6 +8,13 @@ public record FileUploadVO(
         Long knowledgeBaseId,
         String fileName,
         String storagePath,
+        String storageProvider,
+        String bucket,
+        String objectKey,
+        String originalName,
+        String contentType,
+        Long fileSize,
+        String visibility,
         String parseStatus,
         String ingestTaskId,
         List<Map<String, Object>> candidateMemories

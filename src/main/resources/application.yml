@@ -44,8 +44,10 @@ mybatis-plus:
 ai:
   service:
     base-url: ${AI_SERVICE_BASE_URL:http://localhost:8000}
-    internal-token: ${AI_SERVICE_INTERNAL_TOKEN:lyle-internal-dev-token-change-me}
+    internal-token: ${AI_SERVICE_INTERNAL_TOKEN:}
     max-in-memory-size: ${AI_SERVICE_MAX_IN_MEMORY_SIZE:4194304}
+    connect-timeout-millis: ${AI_SERVICE_CONNECT_TIMEOUT_MILLIS:5000}
+    response-timeout-seconds: ${AI_SERVICE_RESPONSE_TIMEOUT_SECONDS:120}
 
 app:
   auth:

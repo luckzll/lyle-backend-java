@@ -211,6 +211,13 @@ class ControllerIntegrationTest {
                 200L,
                 "lyle.txt",
                 "file:///storage/knowledge-files/200/lyle.txt",
+                "LOCAL",
+                "knowledge-files",
+                "200/lyle.txt",
+                "lyle.txt",
+                "text/plain",
+                128L,
+                "private",
                 "completed",
                 "ingest-300",
                 List.of()
@@ -234,6 +241,13 @@ class ControllerIntegrationTest {
                         200L,
                         "lyle.txt",
                         "file:///storage/knowledge-files/200/lyle.txt",
+                        "LOCAL",
+                        "knowledge-files",
+                        "200/lyle.txt",
+                        "lyle.txt",
+                        "text/plain",
+                        128L,
+                        "private",
                         "completed",
                         "ingest-300",
                         List.of()
@@ -309,6 +323,8 @@ class ControllerIntegrationTest {
 
     @Test
     void ragDebugProxiesRequestToAiService() throws Exception {
+        when(knowledgeBaseMapper.selectByIdAndUserId(200L, 42L))
+                .thenReturn(new com.example.aiapp.domain.entity.KnowledgeBaseEntity());
         when(aiServiceClient.debugRag(any())).thenReturn(Map.of(
                 "contexts", List.of(Map.of("title", "lyle.txt #1", "chunk", "答案是紫藤花。")),
                 "queries", List.of("答案是什么")
@@ -322,6 +338,26 @@ class ControllerIntegrationTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.contexts[0].chunk").value("答案是紫藤花。"));
+    }
+
+    @Test
+    void ragDebugRejectsKnowledgeBaseNotOwnedByUser() throws Exception {
+        when(knowledgeBaseMapper.selectByIdAndUserId(999L, 42L)).thenReturn(null);
+
+        mockMvc.perform(post("/rag/debug")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"question":"答案是什么？","knowledgeBaseIds":["999"]}
+                                """))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void ragChunksRequireKnowledgeBaseForNonAdmin() throws Exception {
+        mockMvc.perform(get("/rag/chunks")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isForbidden());
     }
 
     @Test
@@ -360,6 +396,21 @@ class ControllerIntegrationTest {
                 .andExpect(jsonPath("$.dueAt").value("2026-07-03T09:00:00Z"));
 
         verify(aiServiceClient).updateTodoDueAt(eq("42"), eq(88L), any());
+    }
+
+    @Test
+    void managementEndpointsRequireAdminRole() throws Exception {
+        mockMvc.perform(get("/prompts")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/evaluation/runs")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/ingest/tasks/task-1")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isForbidden());
     }
 
     @Test

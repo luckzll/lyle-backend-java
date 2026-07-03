@@ -9,6 +9,13 @@
             knowledge_base_id,
             file_name,
             storage_path,
+            storage_provider,
+            bucket,
+            object_key,
+            original_name,
+            content_type,
+            file_size,
+            visibility,
             parse_status,
             created_at
         FROM knowledge_file
@@ -22,6 +29,13 @@
             knowledge_base_id,
             file_name,
             storage_path,
+            storage_provider,
+            bucket,
+            object_key,
+            original_name,
+            content_type,
+            file_size,
+            visibility,
             parse_status,
             created_at
         FROM knowledge_file

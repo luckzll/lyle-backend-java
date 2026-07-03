@@ -10,6 +10,7 @@ import com.example.aiapp.domain.vo.KnowledgeFileVO;
 import com.example.aiapp.domain.vo.PageVO;
 import com.example.aiapp.infrastructure.client.AiServiceClient;
 import com.example.aiapp.infrastructure.storage.FileStorageService;
+import com.example.aiapp.infrastructure.storage.StoredObject;
 import com.example.aiapp.mapper.KnowledgeBaseMapper;
 import com.example.aiapp.mapper.KnowledgeFileMapper;
 import com.example.aiapp.service.AuditLogService;
@@ -59,7 +60,7 @@ public class FileServiceImpl implements FileService {
         String objectName = knowledgeBaseId + "/" + UUID.randomUUID() + "-" + originalFilename;
 
         try {
-            String storagePath = fileStorageService.upload(
+            StoredObject storedObject = fileStorageService.upload(
                     KNOWLEDGE_BUCKET,
                     objectName,
                     file.getInputStream(),
@@ -70,7 +71,14 @@ public class FileServiceImpl implements FileService {
             KnowledgeFileEntity entity = new KnowledgeFileEntity();
             entity.setKnowledgeBaseId(knowledgeBaseId);
             entity.setFileName(originalFilename);
-            entity.setStoragePath(storagePath);
+            entity.setStoragePath(storedObject.storagePath());
+            entity.setStorageProvider(storedObject.provider());
+            entity.setBucket(storedObject.bucket());
+            entity.setObjectKey(storedObject.objectKey());
+            entity.setOriginalName(originalFilename);
+            entity.setContentType(storedObject.contentType());
+            entity.setFileSize(storedObject.size());
+            entity.setVisibility(storedObject.visibility());
             entity.setParseStatus(STATUS_QUEUED);
             entity.setCreatedAt(LocalDateTime.now());
             knowledgeFileMapper.insert(entity);
@@ -152,6 +160,13 @@ public class FileServiceImpl implements FileService {
                 entity.getKnowledgeBaseId(),
                 entity.getFileName(),
                 entity.getStoragePath(),
+                entity.getStorageProvider(),
+                entity.getBucket(),
+                entity.getObjectKey(),
+                entity.getOriginalName(),
+                entity.getContentType(),
+                entity.getFileSize(),
+                entity.getVisibility(),
                 entity.getParseStatus(),
                 entity.getCreatedAt()
         );
@@ -164,6 +179,13 @@ public class FileServiceImpl implements FileService {
                     String.valueOf(entity.getId()),
                     String.valueOf(entity.getKnowledgeBaseId()),
                     entity.getStoragePath(),
+                    entity.getStorageProvider(),
+                    entity.getBucket(),
+                    entity.getObjectKey(),
+                    entity.getOriginalName(),
+                    entity.getContentType(),
+                    entity.getFileSize(),
+                    entity.getVisibility(),
                     String.valueOf(userId)
             ));
             entity.setParseStatus(ingestResponse == null ? STATUS_QUEUED : ingestResponse.status());
@@ -178,6 +200,13 @@ public class FileServiceImpl implements FileService {
                 entity.getKnowledgeBaseId(),
                 entity.getFileName(),
                 entity.getStoragePath(),
+                entity.getStorageProvider(),
+                entity.getBucket(),
+                entity.getObjectKey(),
+                entity.getOriginalName(),
+                entity.getContentType(),
+                entity.getFileSize(),
+                entity.getVisibility(),
                 entity.getParseStatus(),
                 ingestResponse == null ? null : ingestResponse.taskId(),
                 ingestResponse == null || ingestResponse.candidateMemories() == null

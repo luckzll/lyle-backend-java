@@ -165,6 +165,36 @@ public class AiServiceClient {
                 .block();
     }
 
+    public Map<String, Object> getPendingOperations(String userId, int limit) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/tools/operations/{userId}")
+                        .queryParam("limit", limit)
+                        .build(userId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> confirmPendingOperation(String userId, long operationId) {
+        return aiServiceWebClient.post()
+                .uri("/ai/tools/operations/{userId}/{operationId}/confirm", userId, operationId)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> rejectPendingOperation(String userId, long operationId) {
+        return aiServiceWebClient.post()
+                .uri("/ai/tools/operations/{userId}/{operationId}/reject", userId, operationId)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
     public Map<String, Object> getTodos(String userId, int limit) {
         return aiServiceWebClient.get()
                 .uri(uriBuilder -> uriBuilder

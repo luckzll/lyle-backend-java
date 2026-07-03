@@ -28,7 +28,7 @@ public class FileStorageService {
                 .build();
     }
 
-    public String upload(String bucketName, String objectName, InputStream inputStream, long size, String contentType) {
+    public StoredObject upload(String bucketName, String objectName, InputStream inputStream, long size, String contentType) {
         if (properties.enabled()) {
             return uploadToMinio(objectName, inputStream, size, contentType);
         }
@@ -38,7 +38,15 @@ public class FileStorageService {
         try {
             Files.createDirectories(target.getParent());
             Files.copy(inputStream, target, StandardCopyOption.REPLACE_EXISTING);
-            return target.toUri().toString();
+            return new StoredObject(
+                    "LOCAL",
+                    bucketName,
+                    objectName,
+                    target.toUri().toString(),
+                    contentType == null ? "application/octet-stream" : contentType,
+                    size,
+                    "private"
+            );
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to store uploaded file.", exception);
         }
@@ -65,7 +73,7 @@ public class FileStorageService {
         }
     }
 
-    private String uploadToMinio(String objectName, InputStream inputStream, long size, String contentType) {
+    private StoredObject uploadToMinio(String objectName, InputStream inputStream, long size, String contentType) {
         try {
             ensureBucket();
             minioClient.putObject(PutObjectArgs.builder()
@@ -74,7 +82,15 @@ public class FileStorageService {
                     .stream(inputStream, size, -1)
                     .contentType(contentType == null ? "application/octet-stream" : contentType)
                     .build());
-            return "s3://" + properties.bucket() + "/" + objectName;
+            return new StoredObject(
+                    "MINIO",
+                    properties.bucket(),
+                    objectName,
+                    "s3://" + properties.bucket() + "/" + objectName,
+                    contentType == null ? "application/octet-stream" : contentType,
+                    size,
+                    "private"
+            );
         } catch (Exception exception) {
             throw new IllegalStateException("Failed to upload object to MinIO.", exception);
         }

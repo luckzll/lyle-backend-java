@@ -33,6 +33,21 @@ public class AgentToolController {
         return aiServiceClient.getTodos(currentUserId(), limit);
     }
 
+    @GetMapping("/operations")
+    Map<String, Object> pendingOperations(@RequestParam(defaultValue = "50") int limit) {
+        return aiServiceClient.getPendingOperations(currentUserId(), limit);
+    }
+
+    @PostMapping("/operations/{operationId}/confirm")
+    Map<String, Object> confirmOperation(@PathVariable long operationId) {
+        return aiServiceClient.confirmPendingOperation(currentUserId(), operationId);
+    }
+
+    @PostMapping("/operations/{operationId}/reject")
+    Map<String, Object> rejectOperation(@PathVariable long operationId) {
+        return aiServiceClient.rejectPendingOperation(currentUserId(), operationId);
+    }
+
     @PostMapping("/todos")
     Map<String, Object> createTodo(@RequestBody Map<String, Object> request) {
         return aiServiceClient.createTodo(currentUserId(), request);
