@@ -13,6 +13,11 @@ public record AiChatResponseDTO(
         List<Map<String, Object>> toolResults,
         List<Map<String, Object>> candidateMemories,
         List<Map<String, Object>> candidateTasks,
+        List<Map<String, Object>> candidateGoals,
+        List<Map<String, Object>> candidateDecisions,
+        List<Map<String, Object>> candidateOpenQuestions,
+        List<Map<String, Object>> candidatePlans,
+        Map<String, Object> projectContext,
         Map<String, Object> review
 ) {
 }

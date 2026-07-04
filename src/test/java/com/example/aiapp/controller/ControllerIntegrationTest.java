@@ -67,11 +67,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(controllers = {
         AuthController.class,
+        BriefingController.class,
         ChatController.class,
+        ConnectorController.class,
         ConversationController.class,
         FileController.class,
         KnowledgeBaseController.class,
         MemoryController.class,
+        GoalController.class,
+        PlanController.class,
+        ProjectController.class,
         RagDebugController.class,
         UserController.class,
         AdminController.class,
@@ -205,6 +210,153 @@ class ControllerIntegrationTest {
     }
 
     @Test
+    void projectControllerPassesCurrentUserToAiService() throws Exception {
+        when(aiServiceClient.listProjects("42", "active", 100)).thenReturn(Map.of(
+                "items",
+                List.of(Map.of(
+                        "id", 9,
+                        "name", "Lyle V3",
+                        "status", "active"
+                ))
+        ));
+
+        mockMvc.perform(get("/projects")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].id").value(9))
+                .andExpect(jsonPath("$.items[0].name").value("Lyle V3"));
+
+        verify(aiServiceClient).listProjects("42", "active", 100);
+    }
+
+    @Test
+    void projectDecisionControllerPassesCurrentUserToAiService() throws Exception {
+        Map<String, Object> request = Map.of("title", "V3 先做项目空间", "content", "V3 优先交付项目空间。");
+        when(aiServiceClient.createProjectDecision("42", 9L, request)).thenReturn(Map.of(
+                "id", 33,
+                "title", "V3 先做项目空间",
+                "status", "active"
+        ));
+
+        mockMvc.perform(post("/projects/9/decisions")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(33))
+                .andExpect(jsonPath("$.title").value("V3 先做项目空间"));
+
+        verify(aiServiceClient).createProjectDecision("42", 9L, request);
+    }
+
+    @Test
+    void goalControllerPassesCurrentUserToAiService() throws Exception {
+        when(aiServiceClient.listGoals("42", 9L, "active", 100)).thenReturn(Map.of(
+                "items",
+                List.of(Map.of(
+                        "id", 12,
+                        "projectId", 9,
+                        "title", "完成 V3 项目空间",
+                        "status", "active"
+                ))
+        ));
+
+        mockMvc.perform(get("/goals")
+                        .queryParam("projectId", "9")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].id").value(12))
+                .andExpect(jsonPath("$.items[0].title").value("完成 V3 项目空间"));
+
+        verify(aiServiceClient).listGoals("42", 9L, "active", 100);
+    }
+
+    @Test
+    void planControllerPassesCurrentUserToAiService() throws Exception {
+        when(aiServiceClient.listPlans("42", 9L, "running", 100)).thenReturn(Map.of(
+                "items",
+                List.of(Map.of(
+                        "id", 18,
+                        "projectId", 9,
+                        "title", "整理 V3 PRD",
+                        "status", "running"
+                ))
+        ));
+
+        mockMvc.perform(get("/agent/plans")
+                        .queryParam("projectId", "9")
+                        .queryParam("status", "running")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].id").value(18))
+                .andExpect(jsonPath("$.items[0].title").value("整理 V3 PRD"));
+
+        verify(aiServiceClient).listPlans("42", 9L, "running", 100);
+    }
+
+    @Test
+    void briefingControllerPassesCurrentUserToAiService() throws Exception {
+        when(aiServiceClient.getTodayBriefing("42", 9L)).thenReturn(Map.of(
+                "title", "今日项目简报",
+                "projectId", 9,
+                "todayFocus", List.of("推进 V3 项目空间")
+        ));
+
+        mockMvc.perform(get("/briefings/today")
+                        .queryParam("projectId", "9")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.title").value("今日项目简报"))
+                .andExpect(jsonPath("$.todayFocus[0]").value("推进 V3 项目空间"));
+
+        verify(aiServiceClient).getTodayBriefing("42", 9L);
+    }
+
+    @Test
+    void connectorControllerListsConnectorStatus() throws Exception {
+        when(aiServiceClient.listConnectors()).thenReturn(Map.of(
+                "items",
+                List.of(Map.of(
+                        "name", "local_docs",
+                        "label", "本地文档",
+                        "status", "connected"
+                ))
+        ));
+
+        mockMvc.perform(get("/connectors")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].name").value("local_docs"))
+                .andExpect(jsonPath("$.items[0].status").value("connected"));
+
+        verify(aiServiceClient).listConnectors();
+    }
+
+    @Test
+    void connectorPreviewCreateUsesCurrentUserNotRequestUserId() throws Exception {
+        Map<String, Object> request = Map.of(
+                "userId", "999",
+                "title", "V3 connector note",
+                "content", "body"
+        );
+        when(aiServiceClient.previewConnectorCreate("42", "local_docs", request)).thenReturn(Map.of(
+                "ok", true,
+                "requiresConfirmation", true,
+                "operation", Map.of("id", 9, "status", "pending")
+        ));
+
+        mockMvc.perform(post("/connectors/local_docs/preview-create")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requiresConfirmation").value(true))
+                .andExpect(jsonPath("$.operation.id").value(9));
+
+        verify(aiServiceClient).previewConnectorCreate("42", "local_docs", request);
+    }
+
+    @Test
     void fileControllerRebuildsFileWithCurrentUser() throws Exception {
         when(fileService.rebuild(42L, 200L, 300L)).thenReturn(new FileUploadVO(
                 300L,
@@ -273,6 +425,11 @@ class ControllerIntegrationTest {
                 List.of(Map.of("tool", "memory_stats", "ok", true)),
                 List.of(Map.of("targetKey", "food_preference", "value", "西瓜", "status", "pending")),
                 List.of(Map.of("type", "todo", "title", "完成产品定位文档", "status", "pending")),
+                List.of(Map.of("type", "goal", "title", "完成 V3")),
+                List.of(Map.of("type", "decision", "title", "V3 先做项目空间")),
+                List.of(Map.of("type", "open_question", "question", "连接器先做哪个？")),
+                List.of(Map.of("type", "agent_plan", "title", "整理 V3 PRD")),
+                Map.of("resolver", Map.of("projectId", 9, "projectName", "Lyle V3")),
                 Map.of("approved", true)
         ));
 

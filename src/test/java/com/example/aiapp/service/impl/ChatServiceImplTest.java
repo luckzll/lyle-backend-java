@@ -55,6 +55,11 @@ class ChatServiceImplTest {
                 List.of(),
                 List.of(),
                 List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                Map.of(),
                 Map.of()
         ));
 
@@ -99,6 +104,11 @@ class ChatServiceImplTest {
                 List.of(),
                 List.of(),
                 List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                Map.of(),
                 Map.of()
         ));
 

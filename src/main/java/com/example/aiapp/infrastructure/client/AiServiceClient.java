@@ -196,6 +196,347 @@ public class AiServiceClient {
                 .block();
     }
 
+    public Map<String, Object> listProjects(String userId, String status, int limit) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/projects/{userId}")
+                        .queryParamIfPresent("status", java.util.Optional.ofNullable(status))
+                        .queryParam("limit", limit)
+                        .build(userId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> createProject(String userId, Map<String, Object> request) {
+        return aiServiceWebClient.post()
+                .uri("/ai/projects/{userId}", userId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getProject(String userId, long projectId) {
+        return aiServiceWebClient.get()
+                .uri("/ai/projects/{userId}/{projectId}", userId, projectId)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> updateProject(String userId, long projectId, Map<String, Object> request) {
+        return aiServiceWebClient.patch()
+                .uri("/ai/projects/{userId}/{projectId}", userId, projectId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getProjectOverview(String userId, long projectId) {
+        return aiServiceWebClient.get()
+                .uri("/ai/projects/{userId}/{projectId}/overview", userId, projectId)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> listProjectLinks(String userId, long projectId, String targetType, int limit) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/projects/{userId}/{projectId}/links")
+                        .queryParamIfPresent("targetType", java.util.Optional.ofNullable(targetType))
+                        .queryParam("limit", limit)
+                        .build(userId, projectId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> createProjectLink(String userId, long projectId, Map<String, Object> request) {
+        return aiServiceWebClient.post()
+                .uri("/ai/projects/{userId}/{projectId}/links", userId, projectId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public void deleteProjectLink(String userId, long projectId, long linkId) {
+        aiServiceWebClient.delete()
+                .uri("/ai/projects/{userId}/{projectId}/links/{linkId}", userId, projectId, linkId)
+                .retrieve()
+                .bodyToMono(Void.class)
+                .block();
+    }
+
+    public Map<String, Object> createProjectDecision(String userId, long projectId, Map<String, Object> request) {
+        return aiServiceWebClient.post()
+                .uri("/ai/projects/{userId}/{projectId}/decisions", userId, projectId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> createProjectOpenQuestion(String userId, long projectId, Map<String, Object> request) {
+        return aiServiceWebClient.post()
+                .uri("/ai/projects/{userId}/{projectId}/open-questions", userId, projectId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> updateProjectOpenQuestion(String userId, long questionId, Map<String, Object> request) {
+        return aiServiceWebClient.patch()
+                .uri("/ai/projects/{userId}/open-questions/{questionId}", userId, questionId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> listGoals(String userId, Long projectId, String status, int limit) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/goals/{userId}")
+                        .queryParamIfPresent("projectId", java.util.Optional.ofNullable(projectId))
+                        .queryParamIfPresent("status", java.util.Optional.ofNullable(status))
+                        .queryParam("limit", limit)
+                        .build(userId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> createGoal(String userId, Map<String, Object> request) {
+        return aiServiceWebClient.post()
+                .uri("/ai/goals/{userId}", userId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getGoal(String userId, long goalId) {
+        return aiServiceWebClient.get()
+                .uri("/ai/goals/{userId}/{goalId}", userId, goalId)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> updateGoal(String userId, long goalId, Map<String, Object> request) {
+        return aiServiceWebClient.patch()
+                .uri("/ai/goals/{userId}/{goalId}", userId, goalId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> listMilestones(String userId, long goalId) {
+        return aiServiceWebClient.get()
+                .uri("/ai/goals/{userId}/{goalId}/milestones", userId, goalId)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> createMilestone(String userId, long goalId, Map<String, Object> request) {
+        return aiServiceWebClient.post()
+                .uri("/ai/goals/{userId}/{goalId}/milestones", userId, goalId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> linkTaskToGoal(String userId, long goalId, String taskId, Map<String, Object> request) {
+        return aiServiceWebClient.post()
+                .uri("/ai/goals/{userId}/{goalId}/tasks/{taskId}/link", userId, goalId, taskId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> listPlans(String userId, Long projectId, String status, int limit) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/plans/{userId}")
+                        .queryParamIfPresent("projectId", java.util.Optional.ofNullable(projectId))
+                        .queryParamIfPresent("status", java.util.Optional.ofNullable(status))
+                        .queryParam("limit", limit)
+                        .build(userId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> createPlan(String userId, Map<String, Object> request) {
+        return aiServiceWebClient.post()
+                .uri("/ai/plans/{userId}", userId)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getPlan(String userId, long planId) {
+        return aiServiceWebClient.get()
+                .uri("/ai/plans/{userId}/{planId}", userId, planId)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> transitionPlan(String userId, long planId, String action) {
+        return aiServiceWebClient.post()
+                .uri("/ai/plans/{userId}/{planId}/{action}", userId, planId, action)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getTodayBriefing(String userId, Long projectId) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/briefings/{userId}/today")
+                        .queryParamIfPresent("projectId", java.util.Optional.ofNullable(projectId))
+                        .build(userId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> generateDailyBriefing(String userId, Long projectId) {
+        return aiServiceWebClient.post()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/briefings/{userId}/daily/generate")
+                        .queryParamIfPresent("projectId", java.util.Optional.ofNullable(projectId))
+                        .build(userId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> generateEveningBriefing(String userId, Long projectId) {
+        return aiServiceWebClient.post()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/briefings/{userId}/evening/generate")
+                        .queryParamIfPresent("projectId", java.util.Optional.ofNullable(projectId))
+                        .build(userId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> generateWeeklyBriefing(String userId, Long projectId) {
+        return aiServiceWebClient.post()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/briefings/{userId}/weekly/generate")
+                        .queryParamIfPresent("projectId", java.util.Optional.ofNullable(projectId))
+                        .build(userId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> listConnectors() {
+        return aiServiceWebClient.get()
+                .uri("/ai/connectors")
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getConnectorStatus(String connectorName) {
+        return aiServiceWebClient.get()
+                .uri("/ai/connectors/{connectorName}/status", connectorName)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> listConnectorResources(String connectorName, String repo, String state, int limit) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/connectors/{connectorName}/list")
+                        .queryParamIfPresent("repo", java.util.Optional.ofNullable(repo))
+                        .queryParamIfPresent("state", java.util.Optional.ofNullable(state))
+                        .queryParam("limit", limit)
+                        .build(connectorName))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> searchConnector(String connectorName, String query, String repo, int limit) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/connectors/{connectorName}/search")
+                        .queryParam("q", query)
+                        .queryParamIfPresent("repo", java.util.Optional.ofNullable(repo))
+                        .queryParam("limit", limit)
+                        .build(connectorName))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getConnectorResource(String connectorName, String resourceId) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/connectors/{connectorName}/resources/{resourceId}")
+                        .build(connectorName, resourceId))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> previewConnectorCreate(String userId, String connectorName, Map<String, Object> request) {
+        return aiServiceWebClient.post()
+                .uri("/ai/connectors/{userId}/{connectorName}/preview-create", userId, connectorName)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
     public Map<String, Object> getMetrics() {
         return aiServiceWebClient.get()
                 .uri("/ai/metrics")
