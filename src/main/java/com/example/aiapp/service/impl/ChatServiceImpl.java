@@ -72,6 +72,7 @@ public class ChatServiceImpl implements ChatService {
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
+                request.projectId(),
                 aiMessage,
                 request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds(),
                 false,
@@ -109,6 +110,7 @@ public class ChatServiceImpl implements ChatService {
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
+                request.projectId(),
                 aiMessage,
                 request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds(),
                 true,

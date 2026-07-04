@@ -6,6 +6,7 @@ import java.util.List;
 
 public record ChatRequestDTO(
         String conversationId,
+        Long projectId,
         @NotBlank String message,
         List<String> knowledgeBaseIds
 ) {

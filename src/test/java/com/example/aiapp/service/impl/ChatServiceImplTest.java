@@ -65,6 +65,7 @@ class ChatServiceImplTest {
 
         service.send(42L, new ChatRequestDTO(
                 "100",
+                9L,
                 "修改上一张卡通图，去掉帽子",
                 List.of()
         ));
@@ -73,6 +74,7 @@ class ChatServiceImplTest {
         verify(aiServiceClient).chat(captor.capture());
         assertThat(captor.getValue().message()).contains("https://example.com/cartoon.png");
         assertThat(captor.getValue().message()).doesNotContain("https://example.com/person.png");
+        assertThat(captor.getValue().projectId()).isEqualTo(9L);
     }
 
     @Test
@@ -114,6 +116,7 @@ class ChatServiceImplTest {
 
         service.send(42L, new ChatRequestDTO(
                 "100",
+                null,
                 "我不喜欢帽子",
                 List.of()
         ));

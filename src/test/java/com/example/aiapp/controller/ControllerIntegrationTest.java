@@ -437,7 +437,7 @@ class ControllerIntegrationTest {
                         .header("Authorization", bearer(42L, "lyle", "USER"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"conversationId":"100","message":"答案是什么？","knowledgeBaseIds":["200"]}
+                                {"conversationId":"100","projectId":9,"message":"答案是什么？","knowledgeBaseIds":["200"]}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.conversationId").value("100"))
@@ -451,6 +451,7 @@ class ControllerIntegrationTest {
         ArgumentCaptor<ChatRequestDTO> captor = ArgumentCaptor.forClass(ChatRequestDTO.class);
         verify(chatService).send(eq(42L), captor.capture());
         assertThat(captor.getValue().knowledgeBaseIds()).containsExactly("200");
+        assertThat(captor.getValue().projectId()).isEqualTo(9L);
     }
 
     @Test
@@ -467,7 +468,7 @@ class ControllerIntegrationTest {
                         .header("Authorization", bearer(42L, "lyle", "USER"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"conversationId":"100","message":"答案是什么？","knowledgeBaseIds":["200"]}
+                                {"conversationId":"100","projectId":9,"message":"答案是什么？","knowledgeBaseIds":["200"]}
                                 """))
                 .andExpect(request().asyncStarted())
                 .andReturn();
