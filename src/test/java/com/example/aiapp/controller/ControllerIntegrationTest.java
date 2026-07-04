@@ -159,7 +159,7 @@ class ControllerIntegrationTest {
     @Test
     void protectedEndpointsRequireJwt() throws Exception {
         mockMvc.perform(get("/conversations"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
