@@ -15,6 +15,7 @@ public record ChatResponseVO(
         List<Map<String, Object>> candidateDecisions,
         List<Map<String, Object>> candidateOpenQuestions,
         List<Map<String, Object>> candidatePlans,
+        List<Map<String, Object>> executionSuggestions,
         Map<String, Object> projectContext,
         Map<String, Object> review
 ) {

@@ -47,6 +47,16 @@ src/main/resources/mapper/
 - GET /api/ingest/tasks/{taskId}
 - POST /api/chat/send
 
+## 执行体验 API
+
+Java 层提供 `/api/experience/*`，始终从 JWT 登录态获取用户身份，再代理至 Python 服务。客户端提交的请求体不会决定用户 ID。
+
+- 模板、引导与草稿：`/api/experience/templates`、`/onboarding`、`/drafts/*`
+- 执行中心：`/api/experience/execution/*`、`/confirmations/*`
+- 连接诊断：`/api/experience/connections/*`
+
+工具、工作流与自动化接口统一位于 `/api/workbench/*`，前端以“高级设置”入口承载。
+
 接口调试文件：`http/api.http`
 
 ## 数据库

@@ -21,6 +21,8 @@ public interface AdminService {
 
     Map<String, Object> aiMetrics();
 
+    Map<String, Object> experienceAnalytics(int days);
+
     Map<String, Object> aiTools();
 
     Map<String, Object> toolAudit(int limit);

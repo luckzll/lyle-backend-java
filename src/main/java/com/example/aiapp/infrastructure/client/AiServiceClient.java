@@ -8,8 +8,11 @@ import com.example.aiapp.domain.dto.AiIngestTaskResponseDTO;
 import com.example.aiapp.domain.dto.BatchEvaluationRequestDTO;
 import org.springframework.stereotype.Component;
 import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 
 import java.nio.charset.StandardCharsets;
@@ -64,6 +67,60 @@ public class AiServiceClient {
                 .retrieve()
                 .bodyToMono(AiIngestTaskResponseDTO.class)
                 .block();
+    }
+
+    public Map<String, Object> getJson(String path, Object... uriVariables) {
+        return aiServiceWebClient.get()
+                .uri(path, uriVariables)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> postJson(String path, Map<String, Object> request, Object... uriVariables) {
+        return aiServiceWebClient.post()
+                .uri(path, uriVariables)
+                .bodyValue(request == null ? Map.of() : request)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> patchJson(String path, Map<String, Object> request, Object... uriVariables) {
+        return aiServiceWebClient.patch()
+                .uri(path, uriVariables)
+                .bodyValue(request == null ? Map.of() : request)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> deleteJson(String path, Object... uriVariables) {
+        return aiServiceWebClient.delete()
+                .uri(path, uriVariables)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    private reactor.core.publisher.Mono<? extends Throwable> serviceError(
+            org.springframework.web.reactive.function.client.ClientResponse response
+    ) {
+        return response.bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .defaultIfEmpty(Map.of())
+                .map(body -> new ResponseStatusException(
+                        response.statusCode(),
+                        String.valueOf(body.getOrDefault("detail", "AI 服务请求失败"))
+                ));
     }
 
     public Map<String, Object> getMemory(String userId, String conversationId) {
@@ -540,6 +597,18 @@ public class AiServiceClient {
     public Map<String, Object> getMetrics() {
         return aiServiceWebClient.get()
                 .uri("/ai/metrics")
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getExperienceAnalytics(int days) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/experience/analytics")
+                        .queryParam("days", days)
+                        .build())
                 .retrieve()
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
                 })

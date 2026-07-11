@@ -55,8 +55,9 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -80,7 +81,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         RagDebugController.class,
         UserController.class,
         AdminController.class,
-        AgentToolController.class
+        AgentToolController.class,
+        WorkbenchController.class,
+        ExperienceController.class
 })
 @Import({SecurityConfig.class, JwtService.class, JwtAuthenticationFilter.class, RateLimitFilter.class})
 @EnableConfigurationProperties({AuthProperties.class, RateLimitProperties.class})
@@ -165,6 +168,123 @@ class ControllerIntegrationTest {
     void protectedEndpointsRequireJwt() throws Exception {
         mockMvc.perform(get("/conversations"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void workbenchMcpServerStatusUsesAuthenticatedUser() throws Exception {
+        Map<String, Object> request = Map.of("status", "disabled");
+        when(aiServiceClient.patchJson(
+                "/ai/workbench/mcp/{userId}/servers/{serverId}/status", request, "42", 7L
+        )).thenReturn(Map.of("id", 7, "status", "disabled"));
+
+        mockMvc.perform(patch("/workbench/mcp/servers/7/status")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("disabled"));
+
+        verify(aiServiceClient).patchJson(
+                "/ai/workbench/mcp/{userId}/servers/{serverId}/status", request, "42", 7L
+        );
+    }
+
+    @Test
+    void workbenchWorkspacePolicyDeleteUsesAuthenticatedUser() throws Exception {
+        when(aiServiceClient.deleteJson(
+                "/ai/workbench/workspaces/{userId}/{workspaceId}/policies/{policyId}", "42", 5L, 9L
+        )).thenReturn(Map.of("ok", true, "id", 9));
+
+        mockMvc.perform(delete("/workbench/workspaces/5/policies/9")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true));
+
+        verify(aiServiceClient).deleteJson(
+                "/ai/workbench/workspaces/{userId}/{workspaceId}/policies/{policyId}", "42", 5L, 9L
+        );
+    }
+
+    @Test
+    void workbenchAutomationDeleteUsesAuthenticatedUser() throws Exception {
+        when(aiServiceClient.deleteJson(
+                "/ai/workbench/automations/{userId}/{automationId}", "42", 12L
+        )).thenReturn(Map.of("ok", true, "id", 12));
+
+        mockMvc.perform(delete("/workbench/automations/12")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(12));
+
+        verify(aiServiceClient).deleteJson(
+                "/ai/workbench/automations/{userId}/{automationId}", "42", 12L
+        );
+    }
+
+    @Test
+    void workbenchWorkflowFromPlanUsesAuthenticatedUser() throws Exception {
+        when(aiServiceClient.postJson(
+                "/ai/workbench/workflows/{userId}/from-plan/{planId}", Map.of(), "42", 21L
+        )).thenReturn(Map.of("id", 31, "createdFromPlanId", 21));
+
+        mockMvc.perform(post("/workbench/workflows/from-plan/21")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdFromPlanId").value(21));
+
+        verify(aiServiceClient).postJson(
+                "/ai/workbench/workflows/{userId}/from-plan/{planId}", Map.of(), "42", 21L
+        );
+    }
+
+    @Test
+    void workbenchAutomationTriggerCheckUsesAuthenticatedUser() throws Exception {
+        when(aiServiceClient.postJson(
+                "/ai/workbench/automations/{userId}/{automationId}/check-trigger", Map.of(), "42", 17L
+        )).thenReturn(Map.of("triggered", true));
+
+        mockMvc.perform(post("/workbench/automations/17/check-trigger")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.triggered").value(true));
+
+        verify(aiServiceClient).postJson(
+                "/ai/workbench/automations/{userId}/{automationId}/check-trigger", Map.of(), "42", 17L
+        );
+    }
+
+    @Test
+    void experienceDraftCreationUsesAuthenticatedUser() throws Exception {
+        Map<String, Object> request = Map.of("templateId", "weekly_project_review", "projectId", 99);
+        when(aiServiceClient.postJson(
+                "/ai/experience/drafts/{userId}/from-template", request, "42"
+        )).thenReturn(Map.of("id", 12, "status", "draft", "templateId", "weekly_project_review"));
+
+        mockMvc.perform(post("/experience/drafts/from-template")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(12))
+                .andExpect(jsonPath("$.status").value("draft"));
+
+        verify(aiServiceClient).postJson("/ai/experience/drafts/{userId}/from-template", request, "42");
+    }
+
+    @Test
+    void experienceConfirmationUsesAuthenticatedUser() throws Exception {
+        when(aiServiceClient.postJson(
+                "/ai/experience/confirmations/{userId}/{operationId}/confirm", Map.of(), "42", 17L
+        )).thenReturn(Map.of("operation", Map.of("id", 17, "status", "confirmed")));
+
+        mockMvc.perform(post("/experience/confirmations/17/confirm")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.operation.status").value("confirmed"));
+
+        verify(aiServiceClient).postJson(
+                "/ai/experience/confirmations/{userId}/{operationId}/confirm", Map.of(), "42", 17L
+        );
     }
 
     @Test
@@ -429,6 +549,7 @@ class ControllerIntegrationTest {
                 List.of(Map.of("type", "decision", "title", "V3 先做项目空间")),
                 List.of(Map.of("type", "open_question", "question", "连接器先做哪个？")),
                 List.of(Map.of("type", "agent_plan", "title", "整理 V3 PRD")),
+                List.of(Map.of("type", "workflow", "title", "保存为工作流")),
                 Map.of("resolver", Map.of("projectId", 9, "projectName", "Lyle V3")),
                 Map.of("approved", true)
         ));
@@ -460,6 +581,7 @@ class ControllerIntegrationTest {
             @SuppressWarnings("unchecked")
             Consumer<String> consumer = invocation.getArgument(2, Consumer.class);
             consumer.accept("event: delta\ndata: {\"text\":\"紫藤花\"}\n\n");
+            consumer.accept("event: meta\ndata: {\"candidateMemories\":[{\"schemaPath\":\"preferences.visual.dislikes\",\"value\":\"帽子\",\"status\":\"pending\"}]}\n\n");
             consumer.accept("event: done\ndata: {}\n\n");
             return null;
         }).when(chatService).stream(eq(42L), any(ChatRequestDTO.class), any());
@@ -476,7 +598,11 @@ class ControllerIntegrationTest {
         MvcResult dispatched = mockMvc.perform(asyncDispatch(result))
                 .andExpect(status().isOk())
                 .andReturn();
-        assertThat(dispatched.getResponse().getContentAsString(StandardCharsets.UTF_8)).contains("紫藤花");
+        String body = dispatched.getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(body).contains("紫藤花");
+        assertThat(body).contains("event: meta");
+        assertThat(body).contains("preferences.visual.dislikes");
+        assertThat(body).contains("\"status\":\"pending\"");
     }
 
     @Test

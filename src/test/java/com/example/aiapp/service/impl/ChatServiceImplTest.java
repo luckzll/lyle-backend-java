@@ -59,6 +59,7 @@ class ChatServiceImplTest {
                 List.of(),
                 List.of(),
                 List.of(),
+                List.of(),
                 Map.of(),
                 Map.of()
         ));
@@ -99,9 +100,10 @@ class ChatServiceImplTest {
                 message("assistant", "图片已生成。\n![生成图片](https://example.com/person.png)")
         ));
         when(aiServiceClient.chat(any())).thenReturn(new AiChatResponseDTO(
-                "记住了。",
+                "我已整理成待确认记忆，请确认后再写入长期记忆。",
                 List.of(),
                 null,
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of(),

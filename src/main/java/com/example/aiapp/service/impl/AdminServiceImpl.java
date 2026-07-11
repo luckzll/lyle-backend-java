@@ -110,6 +110,11 @@ public class AdminServiceImpl implements AdminService {
     }
 
     @Override
+    public Map<String, Object> experienceAnalytics(int days) {
+        return aiServiceClient.getExperienceAnalytics(Math.max(1, Math.min(days, 90)));
+    }
+
+    @Override
     public Map<String, Object> aiTools() {
         return aiServiceClient.getTools();
     }

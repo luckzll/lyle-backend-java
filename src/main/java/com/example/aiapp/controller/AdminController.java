@@ -56,6 +56,11 @@ public class AdminController {
         return adminService.aiMetrics();
     }
 
+    @GetMapping("/experience/analytics")
+    Map<String, Object> experienceAnalytics(@RequestParam(defaultValue = "7") int days) {
+        return adminService.experienceAnalytics(days);
+    }
+
     @GetMapping("/ai/tools")
     Map<String, Object> aiTools() {
         return adminService.aiTools();

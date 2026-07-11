@@ -94,6 +94,7 @@ public class ChatServiceImpl implements ChatService {
                 aiResponse.candidateDecisions() == null ? List.of() : aiResponse.candidateDecisions(),
                 aiResponse.candidateOpenQuestions() == null ? List.of() : aiResponse.candidateOpenQuestions(),
                 aiResponse.candidatePlans() == null ? List.of() : aiResponse.candidatePlans(),
+                aiResponse.executionSuggestions() == null ? List.of() : aiResponse.executionSuggestions(),
                 aiResponse.projectContext() == null ? java.util.Map.of() : aiResponse.projectContext(),
                 aiResponse.review() == null ? java.util.Map.of() : aiResponse.review()
         );
