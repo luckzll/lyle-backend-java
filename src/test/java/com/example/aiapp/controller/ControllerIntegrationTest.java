@@ -5,6 +5,7 @@ import com.example.aiapp.config.RateLimitProperties;
 import com.example.aiapp.config.SecurityConfig;
 import com.example.aiapp.domain.dto.AuthRequestDTO;
 import com.example.aiapp.domain.dto.ChatRequestDTO;
+import com.example.aiapp.domain.dto.UpdateConversationDTO;
 import com.example.aiapp.domain.vo.AdminOverviewVO;
 import com.example.aiapp.domain.vo.AuthResponseVO;
 import com.example.aiapp.domain.vo.ChatResponseVO;
@@ -47,6 +48,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -272,6 +275,91 @@ class ControllerIntegrationTest {
     }
 
     @Test
+    void experienceProductEventIgnoresForgedBodyUserId() throws Exception {
+        Map<String, Object> request = Map.of(
+                "eventType", "dashboard_viewed",
+                "page", "dashboard",
+                "userId", "999"
+        );
+        when(aiServiceClient.postJson(
+                "/ai/experience/events/{userId}", request, "42"
+        )).thenReturn(Map.of("accepted", true));
+
+        mockMvc.perform(post("/experience/events")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accepted").value(true));
+
+        verify(aiServiceClient).postJson("/ai/experience/events/{userId}", request, "42");
+    }
+
+    @Test
+    void experienceEffectiveProgressEventUsesAuthenticatedUser() throws Exception {
+        Map<String, Object> request = Map.of(
+                "eventType", "effective_progress_action",
+                "page", "tasks",
+                "actionType", "task_complete"
+        );
+        when(aiServiceClient.postJson(
+                "/ai/experience/events/{userId}", request, "42"
+        )).thenReturn(Map.of("accepted", true));
+
+        mockMvc.perform(post("/experience/events")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accepted").value(true));
+
+        verify(aiServiceClient).postJson("/ai/experience/events/{userId}", request, "42");
+    }
+
+    @Test
+    void experienceResultsProxyCursorAndAutomationFilter() throws Exception {
+        when(aiServiceClient.getExperienceResults(
+                "42", "failed", 7L, 17L, "cursor-next", 20
+        )).thenReturn(Map.of(
+                "items", List.of(),
+                "nextCursor", "cursor-after",
+                "hasMore", true
+        ));
+
+        mockMvc.perform(get("/experience/execution/results")
+                        .param("status", "failed")
+                        .param("projectId", "7")
+                        .param("automationId", "17")
+                        .param("cursor", "cursor-next")
+                        .param("limit", "20")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.nextCursor").value("cursor-after"))
+                .andExpect(jsonPath("$.hasMore").value(true));
+
+        verify(aiServiceClient).getExperienceResults(
+                "42", "failed", 7L, 17L, "cursor-next", 20
+        );
+    }
+
+    @Test
+    void experienceResultsKeepsLegacyNoFilterRequest() throws Exception {
+        when(aiServiceClient.getExperienceResults(
+                "42", null, null, null, null, 50
+        )).thenReturn(Map.of("items", List.of(), "hasMore", false));
+
+        mockMvc.perform(get("/experience/execution/results")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items").isArray())
+                .andExpect(jsonPath("$.hasMore").value(false));
+
+        verify(aiServiceClient).getExperienceResults(
+                "42", null, null, null, null, 50
+        );
+    }
+
+    @Test
     void experienceConfirmationUsesAuthenticatedUser() throws Exception {
         when(aiServiceClient.postJson(
                 "/ai/experience/confirmations/{userId}/{operationId}/confirm", Map.of(), "42", 17L
@@ -311,6 +399,42 @@ class ControllerIntegrationTest {
                 .andExpect(jsonPath("$[0].title").value("项目讨论"));
 
         verify(conversationService).list(42L);
+    }
+
+    @Test
+    void conversationTitleUpdateIsScopedToCurrentUser() throws Exception {
+        LocalDateTime now = LocalDateTime.parse("2026-07-11T18:00:00");
+        when(conversationService.updateTitle(eq(42L), eq(100L), any(UpdateConversationDTO.class)))
+                .thenReturn(new ConversationVO(100L, "新的会话标题", now, now));
+
+        mockMvc.perform(patch("/conversations/100")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"新的会话标题"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(100))
+                .andExpect(jsonPath("$.title").value("新的会话标题"));
+
+        verify(conversationService).updateTitle(eq(42L), eq(100L), any(UpdateConversationDTO.class));
+    }
+
+    @Test
+    void conversationTitleUpdateValidatesBlankAndOverlongTitles() throws Exception {
+        mockMvc.perform(patch("/conversations/100")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"   "}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(patch("/conversations/100")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("title", "x".repeat(121)))))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -577,7 +701,9 @@ class ControllerIntegrationTest {
 
     @Test
     void chatStreamForwardsSseChunks() throws Exception {
+        CountDownLatch responseHeadersReady = new CountDownLatch(1);
         doAnswer(invocation -> {
+            assertThat(responseHeadersReady.await(5, TimeUnit.SECONDS)).isTrue();
             @SuppressWarnings("unchecked")
             Consumer<String> consumer = invocation.getArgument(2, Consumer.class);
             consumer.accept("event: delta\ndata: {\"text\":\"紫藤花\"}\n\n");
@@ -595,6 +721,9 @@ class ControllerIntegrationTest {
                 .andExpect(request().asyncStarted())
                 .andReturn();
 
+        // MockHttpServletResponse's header map is not thread-safe. Release the
+        // stream only after the original security filter chain wrote headers.
+        responseHeadersReady.countDown();
         MvcResult dispatched = mockMvc.perform(asyncDispatch(result))
                 .andExpect(status().isOk())
                 .andReturn();

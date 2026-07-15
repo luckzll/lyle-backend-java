@@ -20,6 +20,11 @@ public class ExperienceController {
         return ai.getJson("/ai/experience/templates/{userId}", userId());
     }
 
+    @PostMapping("/events")
+    Map<String, Object> productEvent(@RequestBody Map<String, Object> request) {
+        return ai.postJson("/ai/experience/events/{userId}", request, userId());
+    }
+
     @GetMapping("/onboarding")
     Map<String, Object> onboarding() {
         return ai.getJson("/ai/experience/onboarding/{userId}", userId());
@@ -63,14 +68,10 @@ public class ExperienceController {
     @GetMapping("/execution/results")
     Map<String, Object> results(@RequestParam(required = false) String status,
                                 @RequestParam(required = false) Long projectId,
+                                @RequestParam(required = false) Long automationId,
+                                @RequestParam(required = false) String cursor,
                                 @RequestParam(defaultValue = "50") int limit) {
-        String path = "/ai/experience/execution/{userId}/results?limit={limit}"
-                + (status == null ? "" : "&status={status}")
-                + (projectId == null ? "" : "&projectId={projectId}");
-        if (status != null && projectId != null) return ai.getJson(path, userId(), limit, status, projectId);
-        if (status != null) return ai.getJson(path, userId(), limit, status);
-        if (projectId != null) return ai.getJson(path, userId(), limit, projectId);
-        return ai.getJson(path, userId(), limit);
+        return ai.getExperienceResults(userId(), status, projectId, automationId, cursor, limit);
     }
 
     @GetMapping("/execution/results/{resultId}")

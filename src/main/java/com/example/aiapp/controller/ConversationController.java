@@ -1,6 +1,7 @@
 package com.example.aiapp.controller;
 
 import com.example.aiapp.domain.dto.CreateConversationDTO;
+import com.example.aiapp.domain.dto.UpdateConversationDTO;
 import com.example.aiapp.domain.vo.ConversationVO;
 import com.example.aiapp.domain.vo.PageVO;
 import com.example.aiapp.service.ConversationService;
@@ -9,6 +10,7 @@ import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -43,6 +45,14 @@ public class ConversationController {
             @RequestParam(defaultValue = "20") long size
     ) {
         return conversationService.page(CurrentUserUtils.currentUserId(), page, size);
+    }
+
+    @PatchMapping("/{conversationId}")
+    ConversationVO updateTitle(
+            @PathVariable Long conversationId,
+            @Valid @RequestBody UpdateConversationDTO request
+    ) {
+        return conversationService.updateTitle(CurrentUserUtils.currentUserId(), conversationId, request);
     }
 
     @DeleteMapping("/{conversationId}")

@@ -16,6 +16,7 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Map;
 
 @Component
@@ -87,6 +88,21 @@ public class AiServiceClient {
                 .onStatus(HttpStatusCode::isError, this::serviceError)
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
                 })
+                .block();
+    }
+
+    public Map<String, Object> postJsonWithTimeout(String path, Map<String, Object> request, Duration timeout) {
+        Duration bounded = timeout == null || timeout.isNegative() || timeout.isZero()
+                ? Duration.ofSeconds(1)
+                : timeout;
+        return aiServiceWebClient.post()
+                .uri(path)
+                .bodyValue(request == null ? Map.of() : request)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .timeout(bounded)
                 .block();
     }
 
@@ -611,6 +627,36 @@ public class AiServiceClient {
                         .build())
                 .retrieve()
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getExperienceResults(
+            String userId,
+            String status,
+            Long projectId,
+            Long automationId,
+            String cursor,
+            int limit
+    ) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/experience/execution/{userId}/results")
+                        .queryParam("limit", limit)
+                        .queryParamIfPresent(
+                                "status",
+                                java.util.Optional.ofNullable(status).filter(value -> !value.isBlank())
+                        )
+                        .queryParamIfPresent("projectId", java.util.Optional.ofNullable(projectId))
+                        .queryParamIfPresent("automationId", java.util.Optional.ofNullable(automationId))
+                        .queryParamIfPresent(
+                                "cursor",
+                                java.util.Optional.ofNullable(cursor).filter(value -> !value.isBlank())
+                        )
+                        .build(userId))
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
                 })
                 .block();
     }

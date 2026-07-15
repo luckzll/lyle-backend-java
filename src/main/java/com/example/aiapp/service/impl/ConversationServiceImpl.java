@@ -3,6 +3,7 @@ package com.example.aiapp.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.aiapp.domain.dto.CreateConversationDTO;
+import com.example.aiapp.domain.dto.UpdateConversationDTO;
 import com.example.aiapp.domain.entity.ConversationEntity;
 import com.example.aiapp.domain.vo.ConversationVO;
 import com.example.aiapp.domain.vo.PageVO;
@@ -70,6 +71,19 @@ public class ConversationServiceImpl implements ConversationService {
                 result.getCurrent(),
                 result.getSize()
         );
+    }
+
+    @Override
+    public ConversationVO updateTitle(Long userId, Long conversationId, UpdateConversationDTO request) {
+        ConversationEntity entity = conversationMapper.selectByIdAndUserId(conversationId, userId);
+        if (entity == null) {
+            throw new ResponseStatusException(NOT_FOUND, "会话不存在");
+        }
+        entity.setTitle(request.title().trim());
+        entity.setUpdatedAt(LocalDateTime.now());
+        conversationMapper.updateById(entity);
+        auditLogService.record(userId, "update", "conversation", String.valueOf(conversationId));
+        return toVO(entity);
     }
 
     @Override
