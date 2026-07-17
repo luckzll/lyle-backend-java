@@ -352,6 +352,74 @@ public class AgentTaskRepository {
         return id;
     }
 
+    public long createSubtaskGroup(
+            long runId,
+            int maxParallelism,
+            Map<String, Object> branchBudget,
+            String joinPolicy
+    ) {
+        long id = nextId();
+        jdbc.update("""
+                INSERT INTO agent_subtask_group
+                  (id, task_run_id, parent_step_run_id, status, max_parallelism,
+                   branch_budget, join_policy, succeeded_count, failed_count, created_at)
+                VALUES (?, ?, NULL, 'RUNNING', ?, ?, ?, 0, 0, ?)
+                """, id, runId, Math.max(1, Math.min(maxParallelism, 3)),
+                json(branchBudget), joinPolicy, now());
+        return id;
+    }
+
+    public void addSubtaskGroupMember(
+            long groupId,
+            long stepRunId,
+            String branchKey,
+            Map<String, Object> branchBudget
+    ) {
+        jdbc.update("""
+                INSERT INTO agent_subtask_group_member
+                  (subtask_group_id, step_run_id, branch_key, branch_budget, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """, groupId, stepRunId, branchKey, json(branchBudget), now());
+    }
+
+    public void completeSubtaskGroup(long groupId, String status, int succeeded, int failed) {
+        jdbc.update("""
+                UPDATE agent_subtask_group
+                SET status=?, succeeded_count=?, failed_count=?, completed_at=?
+                WHERE id=? AND status='RUNNING'
+                """, status, Math.max(0, succeeded), Math.max(0, failed), now(), groupId);
+    }
+
+    public void acceptFailedSubtaskMembers(long groupId) {
+        jdbc.update("""
+                UPDATE agent_step_run r
+                JOIN agent_subtask_group_member m ON m.step_run_id=r.id
+                SET r.status='CANCELLED', r.finished_at=COALESCE(r.finished_at, ?)
+                WHERE m.subtask_group_id=? AND r.status IN ('FAILED','WAITING_INPUT')
+                """, now(), groupId);
+    }
+
+    public List<Map<String, Object>> listSubtaskGroups(long runId) {
+        return jdbc.query("""
+                SELECT id, status, max_parallelism, branch_budget, join_policy,
+                       succeeded_count, failed_count, created_at, completed_at
+                FROM agent_subtask_group
+                WHERE task_run_id=? ORDER BY created_at
+                """, (rs, rowNum) -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", rs.getLong(1));
+            item.put("status", rs.getString(2));
+            item.put("maxParallelism", rs.getInt(3));
+            item.put("branchBudget", readMap(rs.getString(4)));
+            item.put("joinPolicy", rs.getString(5));
+            item.put("succeededCount", rs.getInt(6));
+            item.put("failedCount", rs.getInt(7));
+            item.put("createdAt", iso(rs.getObject(8, LocalDateTime.class)));
+            item.put("completedAt", iso(rs.getObject(9, LocalDateTime.class)));
+            return item;
+        }, runId);
+    }
+
     public void finishStep(
             long stepRunId,
             AgentStepStatus status,

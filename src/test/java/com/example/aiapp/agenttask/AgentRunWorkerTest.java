@@ -26,8 +26,13 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -42,8 +47,114 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
 
 class AgentRunWorkerTest {
+
+    @Test
+    void releaseDagRunsExactlyThreeIndependentReadBranchesConcurrently() throws Exception {
+        AgentTaskRepository repository = mock(AgentTaskRepository.class);
+        AgentDecisionClient decisions = mock(AgentDecisionClient.class);
+        AgentEventPublisher events = mock(AgentEventPublisher.class);
+        ScheduledExecutorService scheduler = mock(ScheduledExecutorService.class);
+        ScheduledFuture<?> heartbeat = mock(ScheduledFuture.class);
+        doReturn(heartbeat).when(scheduler)
+                .scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), any());
+
+        LocalDateTime now = LocalDateTime.now();
+        Map<String, Object> constraints = Map.of(
+                "maxParallelReadBranches", 99,
+                "parallelJoinPolicy", "ALL"
+        );
+        TaskRecord task = new TaskRecord(
+                1, 7, 9L, null, "发布检查", "并行检查发布条件",
+                List.of("三类证据齐全"), constraints, "release-check", AgentTaskStatus.RUNNING,
+                "READ", 1, 1, 10L, 0, now, now);
+        TaskRecord completedTask = new TaskRecord(
+                1, 7, 9L, null, "发布检查", "并行检查发布条件",
+                List.of("三类证据齐全"), constraints, "release-check", AgentTaskStatus.COMPLETED,
+                "READ", 1, 1, 10L, 1, now, now);
+        PlanStepRecord inspect = readStep(20, 30, "inspect_project", 1, "project.inspect", List.of());
+        PlanStepRecord git = readStep(21, 30, "git_status", 2, "workspace.git_status", List.of("inspect_project"));
+        PlanStepRecord docs = readStep(22, 30, "docs_check", 3, "workspace.docs_check", List.of("inspect_project"));
+        PlanStepRecord tests = readStep(23, 30, "release_check", 4, "release.check", List.of("inspect_project"));
+        PlanRecord plan = new PlanRecord(
+                30, 1, 1, "MODEL", task.goal(), task.completionCriteria(), constraints,
+                Map.of("allowedTools", List.of(
+                        "project.inspect", "workspace.git_status", "workspace.docs_check", "release.check")),
+                AgentBudget.DEFAULT, Map.of(), "APPROVED", 7L, now, now,
+                List.of(inspect, git, docs, tests));
+        RunRecord run = new RunRecord(
+                10, 1, 1, "RUNNING", "MISSION",
+                Map.of("allowedTools", List.of(
+                        "project.inspect", "workspace.git_status", "workspace.docs_check", "release.check")),
+                AgentBudget.DEFAULT, new AgentBudgetUsage(1, 1, 0, 0, 5, 0),
+                0, null, null, null, now, null, null, 0, now, now);
+        AgentBudgetUsage reserved = new AgentBudgetUsage(1, 4, 0, 0, 5, 0);
+        AgentBudgetUsage settled = new AgentBudgetUsage(4, 4, 0, 0, 20, 0);
+
+        when(repository.findRun(10)).thenReturn(Optional.of(run));
+        when(repository.findTask(1)).thenReturn(Optional.of(task), Optional.of(completedTask));
+        when(repository.findPlan(1, 1)).thenReturn(Optional.of(plan));
+        when(repository.acquireLease(eq(10L), anyString(), anyInt())).thenReturn(true);
+        when(repository.heartbeat(eq(10L), anyString(), anyInt())).thenReturn(true);
+        when(repository.findRunningStep(10)).thenReturn(Optional.empty());
+        when(repository.listStepRuns(10)).thenReturn(List.of(Map.of(
+                "stepKey", "inspect_project", "status", "SUCCEEDED"
+        )));
+        when(repository.createSubtaskGroup(eq(10L), eq(3), anyMap(), eq("ALL"))).thenReturn(70L);
+        when(repository.nextAttempt(eq(10L), anyLong())).thenReturn(1);
+        when(repository.createStepRun(eq(10L), anyLong(), eq(1), anyString(), anyMap()))
+                .thenReturn(100L, 101L, 102L);
+        when(repository.reserveBudget(eq(10L), anyLong(), eq(1), eq(0)))
+                .thenReturn(Optional.of(reserved));
+        when(repository.listArtifacts(1)).thenReturn(List.of());
+        when(repository.latestInput(10)).thenReturn(Map.of());
+        when(repository.previousFingerprint(eq(10L), anyString())).thenReturn(Optional.empty());
+        when(repository.stageStepResult(anyLong(), anyMap())).thenReturn(true);
+        when(repository.settleBudget(eq(10L), anyLong(), eq(1), eq(0L), eq(0L), anyLong(), eq(0)))
+                .thenReturn(Optional.of(settled));
+
+        CountDownLatch allEntered = new CountDownLatch(3);
+        AtomicInteger active = new AtomicInteger();
+        AtomicInteger maxActive = new AtomicInteger();
+        when(decisions.executeStep(anyMap(), any())).thenAnswer(invocation -> {
+            int value = active.incrementAndGet();
+            maxActive.accumulateAndGet(value, Math::max);
+            allEntered.countDown();
+            if (!allEntered.await(2, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("三个分支未在并行窗口内同时启动");
+            }
+            active.decrementAndGet();
+            Map<String, Object> request = invocation.getArgument(0);
+            return Map.of(
+                    "status", "SUCCESS",
+                    "summary", "完成只读检查：" + request.get("toolRef"),
+                    "dataRef", "tool-result://" + request.get("stepRunId"),
+                    "evidenceRefs", List.of(),
+                    "criterionEvidence", List.of(),
+                    "usage", Map.of("modelTokens", 0, "costMicros", 0)
+            );
+        });
+
+        ExecutorService subtaskExecutor = Executors.newFixedThreadPool(3);
+        try {
+            AgentRunWorker worker = new AgentRunWorker(
+                    repository, new AgentPolicyEngine(), new AgentBudgetGuard(), decisions, events,
+                    new ObjectMapper(), Runnable::run, subtaskExecutor, scheduler,
+                    new AgentTaskFeatureFlags(true, "*", "*", "*", "*"), null, 3
+            );
+            worker.enqueue(10);
+        } finally {
+            subtaskExecutor.shutdownNow();
+        }
+
+        verify(decisions, times(3)).executeStep(anyMap(), any());
+        verify(repository).completeSubtaskGroup(70, "COMPLETED", 3, 0);
+        verify(repository, never()).acceptFailedSubtaskMembers(70);
+        verify(decisions, never()).nextAction(anyMap());
+        org.junit.jupiter.api.Assertions.assertEquals(3, maxActive.get());
+    }
 
     @Test
     void recoveryReusesStagedSettledResultWithoutCallingToolOrChargingSettlementAgain() {
@@ -359,6 +470,19 @@ class AgentRunWorkerTest {
         } catch (NoSuchAlgorithmException exc) {
             throw new IllegalStateException(exc);
         }
+    }
+
+    private static PlanStepRecord readStep(
+            long id,
+            long planId,
+            String key,
+            int position,
+            String toolRef,
+            List<Object> dependencies
+    ) {
+        return new PlanStepRecord(
+                id, planId, key, position, "READ", key, "只读分支", toolRef,
+                Map.of("workspaceId", 47), dependencies, "READ", Map.of(), false);
     }
 
     private static boolean isStrictlySanitizedSynthesis(Map<String, Object> value) {

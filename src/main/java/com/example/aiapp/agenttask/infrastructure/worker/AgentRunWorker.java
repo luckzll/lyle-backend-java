@@ -16,8 +16,13 @@ import com.example.aiapp.agenttask.infrastructure.repository.AgentTaskRepository
 import com.example.aiapp.agenttask.infrastructure.repository.AgentTaskRepository.RunRecord;
 import com.example.aiapp.agenttask.infrastructure.repository.AgentTaskRepository.StepRunRecord;
 import com.example.aiapp.agenttask.infrastructure.repository.AgentTaskRepository.TaskRecord;
+import com.example.aiapp.mission.application.DelegationRuntimeGuard;
+import com.example.aiapp.mission.application.DelegationRuntimeGuard.RuntimeDecision;
+import com.example.aiapp.mission.infrastructure.metrics.MissionMetrics;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -31,8 +36,10 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Callable;
@@ -53,11 +60,16 @@ public class AgentRunWorker {
     private final AgentEventPublisher events;
     private final ObjectMapper objectMapper;
     private final Executor executor;
+    private final Executor subtaskExecutor;
     private final ScheduledExecutorService leaseScheduler;
     private final AgentTaskFeatureFlags featureFlags;
+    private final DelegationRuntimeGuard delegationGuard;
+    private final int systemMaxParallelReadBranches;
+    private final MissionMetrics missionMetrics;
     private final String workerId = "worker-" + UUID.randomUUID();
     private final Set<Long> queuedOrRunning = ConcurrentHashMap.newKeySet();
 
+    @Autowired
     public AgentRunWorker(
             AgentTaskRepository repository,
             AgentPolicyEngine policyEngine,
@@ -66,8 +78,12 @@ public class AgentRunWorker {
             AgentEventPublisher events,
             ObjectMapper objectMapper,
             @Qualifier("agentTaskExecutor") Executor executor,
+            @Qualifier("agentSubtaskExecutor") Executor subtaskExecutor,
             @Qualifier("agentLeaseScheduler") ScheduledExecutorService leaseScheduler,
-            AgentTaskFeatureFlags featureFlags
+            AgentTaskFeatureFlags featureFlags,
+            DelegationRuntimeGuard delegationGuard,
+            @Value("${app.agent-task.max-parallel-read-branches:3}") int systemMaxParallelReadBranches,
+            MissionMetrics missionMetrics
     ) {
         this.repository = repository;
         this.policyEngine = policyEngine;
@@ -76,8 +92,47 @@ public class AgentRunWorker {
         this.events = events;
         this.objectMapper = objectMapper;
         this.executor = executor;
+        this.subtaskExecutor = subtaskExecutor;
         this.leaseScheduler = leaseScheduler;
         this.featureFlags = featureFlags;
+        this.delegationGuard = delegationGuard;
+        this.systemMaxParallelReadBranches = Math.max(1, Math.min(systemMaxParallelReadBranches, 3));
+        this.missionMetrics = missionMetrics;
+    }
+
+    public AgentRunWorker(
+            AgentTaskRepository repository,
+            AgentPolicyEngine policyEngine,
+            AgentBudgetGuard budgetGuard,
+            AgentDecisionClient decisions,
+            AgentEventPublisher events,
+            ObjectMapper objectMapper,
+            Executor executor,
+            Executor subtaskExecutor,
+            ScheduledExecutorService leaseScheduler,
+            AgentTaskFeatureFlags featureFlags,
+            DelegationRuntimeGuard delegationGuard,
+            int systemMaxParallelReadBranches
+    ) {
+        this(
+                repository, policyEngine, budgetGuard, decisions, events, objectMapper,
+                executor, subtaskExecutor, leaseScheduler, featureFlags, delegationGuard,
+                systemMaxParallelReadBranches, null);
+    }
+
+    public AgentRunWorker(
+            AgentTaskRepository repository,
+            AgentPolicyEngine policyEngine,
+            AgentBudgetGuard budgetGuard,
+            AgentDecisionClient decisions,
+            AgentEventPublisher events,
+            ObjectMapper objectMapper,
+            Executor executor,
+            ScheduledExecutorService leaseScheduler,
+            AgentTaskFeatureFlags featureFlags
+    ) {
+        this(repository, policyEngine, budgetGuard, decisions, events, objectMapper,
+                executor, executor, leaseScheduler, featureFlags, null, 3, null);
     }
 
     public void enqueue(long runId) {
@@ -197,6 +252,12 @@ public class AgentRunWorker {
                         "stepRunId", recovering.id(), "errorCode", recoveredPolicy.errorCode(), "policyRejected", true));
                 return false;
             }
+            RuntimeDecision recoveredDelegation = authorizeDelegation(
+                    task, run, recovering.id(), recoveredStep, recovering.input());
+            if (!recoveredDelegation.allowed()) {
+                failDelegation(task, run, recovering.id(), recoveredDelegation);
+                return false;
+            }
             events.publish(task.id(), "step.recovery.started", Map.of(
                     "stepRunId", recovering.id(),
                     "stepKey", recoveredStep.stepKey(),
@@ -204,7 +265,8 @@ public class AgentRunWorker {
             ));
             if (!ensureBudgetReserved(task, run, recoveredStep, recovering.id(), recovering.attempt())) return false;
             RunRecord refreshed = repository.findRun(run.id()).orElse(run);
-            if (recoveredPolicy.requiresConfirmation()) {
+            if (recoveredDelegation.requiresConfirmation()
+                    || (recoveredPolicy.requiresConfirmation() && !recoveredDelegation.autoExecuteWrite())) {
                 createChangePreview(task, refreshed, recoveredStep, recovering.id(), recovering.idempotencyKey(), recovering.input());
                 return false;
             }
@@ -214,11 +276,14 @@ public class AgentRunWorker {
                         "budgetSettlementReused", hasSettlement
                 ));
                 return executeReadStep(task, refreshed, plan, recoveredStep, recovering.id(), recovering.attempt(),
-                        recovering.idempotencyKey(), recovering.input(), stagedResult);
+                        recovering.idempotencyKey(), recovering.input(), stagedResult,
+                        recoveredDelegation.autoExecuteWrite());
             }
             return executeReadStep(task, refreshed, plan, recoveredStep, recovering.id(), recovering.attempt(),
-                    recovering.idempotencyKey(), recovering.input());
+                    recovering.idempotencyKey(), recovering.input(), recoveredDelegation.autoExecuteWrite());
         }
+        Boolean parallelResult = executeReadyParallelBranches(task, run, plan);
+        if (parallelResult != null) return parallelResult;
         PlanStepRecord step = repository.findNextStep(run.id(), plan.id()).orElse(null);
         if (step == null) {
             finalizeTask(task, run, plan);
@@ -237,6 +302,11 @@ public class AgentRunWorker {
             failPolicy(task, run, step, policy);
             return false;
         }
+        RuntimeDecision delegation = authorizeDelegation(task, run, null, step, stepInput);
+        if (!delegation.allowed()) {
+            failDelegation(task, run, null, delegation);
+            return false;
+        }
         int attempt = repository.nextAttempt(run.id(), step.id());
         if (attempt > run.budgetLimit().maxRetriesPerStep() + 1) {
             stopForInput(task, run, "RETRY_LIMIT", "步骤重试次数已达到上限。");
@@ -252,12 +322,200 @@ public class AgentRunWorker {
         ));
         if (!ensureBudgetReserved(task, run, step, stepRunId, attempt)) return false;
         RunRecord reservedRun = repository.findRun(run.id()).orElse(run);
-        if (policy.requiresConfirmation()) {
+        if (delegation.requiresConfirmation()
+                || (policy.requiresConfirmation() && !delegation.autoExecuteWrite())) {
             createChangePreview(task, reservedRun, step, stepRunId, idempotencyKey, stepInput);
             return false;
         }
-        return executeReadStep(task, reservedRun, plan, step, stepRunId, attempt, idempotencyKey, stepInput);
+        return executeReadStep(
+                task, reservedRun, plan, step, stepRunId, attempt, idempotencyKey, stepInput,
+                delegation.autoExecuteWrite());
     }
+
+    /**
+     * Starts one bounded fan-out only when the approved DAG exposes at least
+     * two independent R0 steps. The controller creates and reserves every
+     * branch before dispatch, caps concurrency at three, and joins before any
+     * downstream step can become eligible.
+     */
+    private Boolean executeReadyParallelBranches(TaskRecord task, RunRecord run, PlanRecord plan) {
+        int requested = intValue(task.constraints().get("maxParallelReadBranches"));
+        int maxParallelism = Math.min(systemMaxParallelReadBranches, Math.min(3, requested));
+        if (maxParallelism < 2) return null;
+
+        List<Map<String, Object>> priorRuns = repository.listStepRuns(run.id());
+        Set<String> succeededKeys = new HashSet<>();
+        Set<String> attemptedKeys = new HashSet<>();
+        for (Map<String, Object> prior : priorRuns) {
+            String key = text(prior.get("stepKey"));
+            if (!key.isBlank()) attemptedKeys.add(key);
+            if ("SUCCEEDED".equals(text(prior.get("status")).toUpperCase())) succeededKeys.add(key);
+        }
+        List<PlanStepRecord> ready = plan.steps().stream()
+                .filter(step -> !attemptedKeys.contains(step.stepKey()))
+                .filter(step -> !step.writeIntent())
+                .filter(step -> "READ".equals(step.riskLevel()))
+                .filter(step -> !"analysis.synthesize".equals(step.toolRef()))
+                .filter(step -> step.dependencies().stream()
+                        .map(String::valueOf)
+                        .allMatch(succeededKeys::contains))
+                .limit(maxParallelism)
+                .toList();
+        if (ready.size() < 2) return null;
+
+        List<PreparedBranch> authorized = new ArrayList<>();
+        for (PlanStepRecord step : ready) {
+            Map<String, Object> input = resolveInput(task, plan, step);
+            var constraintViolation = AgentConstraintPolicy.violation(
+                    step.toolRef(), input, task.constraints(), task.projectId());
+            if (constraintViolation.isPresent()) {
+                failConstraint(task, run, null, constraintViolation.get());
+                return false;
+            }
+            AgentPolicyEngine.PolicyDecision policy = policyEngine.evaluate(
+                    step.toolRef(), step.riskLevel(), false, run.permissionSnapshot(), input);
+            if (!policy.allowed() || policy.requiresConfirmation()) {
+                failPolicy(task, run, step, policy);
+                return false;
+            }
+            RuntimeDecision delegation = authorizeDelegation(task, run, null, step, input);
+            if (!delegation.allowed() || delegation.requiresConfirmation()) {
+                failDelegation(task, run, null, delegation);
+                return false;
+            }
+            authorized.add(new PreparedBranch(step, input, delegation.autoExecuteWrite()));
+        }
+
+        RunRecord current = repository.findRun(run.id()).orElse(run);
+        Map<String, Object> branchBudget = parallelBranchBudget(remainingBudget(current), authorized.size());
+        String requestedJoin = text(task.constraints().get("parallelJoinPolicy")).toUpperCase();
+        String joinPolicy = "PARTIAL_ALLOWED".equals(requestedJoin) ? requestedJoin : "ALL";
+        long groupId = repository.createSubtaskGroup(
+                run.id(), authorized.size(), branchBudget, joinPolicy);
+        List<RunningBranch> branches = new ArrayList<>();
+        for (PreparedBranch branch : authorized) {
+            PlanStepRecord step = branch.step();
+            int attempt = repository.nextAttempt(run.id(), step.id());
+            if (attempt > run.budgetLimit().maxRetriesPerStep() + 1) {
+                repository.completeSubtaskGroup(groupId, "FAILED", 0, branches.size());
+                stopForInput(task, run, "RETRY_LIMIT", "并行分支重试次数已达到上限。");
+                return false;
+            }
+            String idempotencyKey = sha256(task.id() + ":" + run.id() + ":" + step.id() + ":" + attempt);
+            long stepRunId = repository.createStepRun(
+                    run.id(), step.id(), attempt, idempotencyKey, redactInput(branch.input()));
+            repository.addSubtaskGroupMember(groupId, stepRunId, step.stepKey(), branchBudget);
+            events.publish(task.id(), "step.started", Map.of(
+                    "stepRunId", stepRunId,
+                    "stepKey", step.stepKey(),
+                    "title", step.title(),
+                    "attempt", attempt,
+                    "subtaskGroupId", groupId
+            ));
+            if (!ensureBudgetReserved(task, run, step, stepRunId, attempt)) {
+                repository.completeSubtaskGroup(groupId, "FAILED", 0, branches.size() + 1);
+                return false;
+            }
+            branches.add(new RunningBranch(
+                    step, stepRunId, attempt, idempotencyKey, branch.input(),
+                    branch.delegatedWriteAuthorized(), branchBudget));
+        }
+        events.publish(task.id(), "subtask.group.started", Map.of(
+                "subtaskGroupId", groupId,
+                "maxParallelism", branches.size(),
+                "joinPolicy", joinPolicy,
+                "branchKeys", branches.stream().map(value -> value.step().stepKey()).toList()
+        ));
+        if (missionMetrics != null) missionMetrics.parallelism(branches.size());
+
+        List<CompletableFuture<Boolean>> futures = branches.stream()
+                .map(branch -> CompletableFuture.supplyAsync(
+                        () -> executeParallelBranch(task, run, plan, branch), subtaskExecutor))
+                .toList();
+        int succeeded = 0;
+        for (CompletableFuture<Boolean> future : futures) {
+            if (Boolean.TRUE.equals(future.join())) succeeded++;
+        }
+        int failed = branches.size() - succeeded;
+        String groupStatus = failed == 0 ? "COMPLETED"
+                : "PARTIAL_ALLOWED".equals(joinPolicy) && succeeded > 0 ? "PARTIALLY_COMPLETED" : "FAILED";
+        repository.completeSubtaskGroup(groupId, groupStatus, succeeded, failed);
+        events.publish(task.id(), "subtask.group.completed", Map.of(
+                "subtaskGroupId", groupId,
+                "status", groupStatus,
+                "succeededCount", succeeded,
+                "failedCount", failed,
+                "joinPolicy", joinPolicy
+        ));
+        if (failed > 0 && "ALL".equals(joinPolicy)) {
+            stopForInput(task, repository.findRun(run.id()).orElse(run),
+                    "PARALLEL_BRANCH_FAILED",
+                    "并行只读检查有 " + failed + " 个分支失败；其他分支证据已保留。");
+            return false;
+        }
+        if (failed > 0) repository.acceptFailedSubtaskMembers(groupId);
+        if (completeRequestedPause(task.id(), run.id())) return false;
+        return true;
+    }
+
+    private boolean executeParallelBranch(
+            TaskRecord task,
+            RunRecord run,
+            PlanRecord plan,
+            RunningBranch branch
+    ) {
+        try {
+            return executeReadStep(
+                    task, repository.findRun(run.id()).orElse(run), plan, branch.step(),
+                    branch.stepRunId(), branch.attempt(), branch.idempotencyKey(), branch.input(),
+                    null, branch.delegatedWriteAuthorized(), true, branch.budget());
+        } catch (RuntimeException exc) {
+            repository.finishStep(
+                    branch.stepRunId(),
+                    AgentStepStatus.FAILED,
+                    Map.of("summary", "并行只读分支执行失败，其他分支不受影响。"),
+                    null,
+                    null,
+                    classifyError(exc)
+            );
+            events.publish(task.id(), "step.failed", Map.of(
+                    "stepRunId", branch.stepRunId(),
+                    "errorCode", classifyError(exc),
+                    "parallelBranch", true
+            ));
+            return false;
+        }
+    }
+
+    private static Map<String, Object> parallelBranchBudget(
+            Map<String, Object> remaining,
+            int branchCount
+    ) {
+        int divisor = Math.max(1, branchCount);
+        Map<String, Object> budget = new LinkedHashMap<>();
+        budget.put("steps", 1);
+        budget.put("toolCalls", 1);
+        budget.put("modelTokens", Math.max(1, longValue(remaining.get("modelTokens")) / divisor));
+        budget.put("costMicros", Math.max(1, longValue(remaining.get("costMicros")) / divisor));
+        budget.put("wallTimeMillis", Math.max(1, longValue(remaining.get("wallTimeMillis")) / divisor));
+        return budget;
+    }
+
+    private record PreparedBranch(
+            PlanStepRecord step,
+            Map<String, Object> input,
+            boolean delegatedWriteAuthorized
+    ) { }
+
+    private record RunningBranch(
+            PlanStepRecord step,
+            long stepRunId,
+            int attempt,
+            String idempotencyKey,
+            Map<String, Object> input,
+            boolean delegatedWriteAuthorized,
+            Map<String, Object> budget
+    ) { }
 
     private boolean ensureBudgetReserved(TaskRecord task, RunRecord run, PlanStepRecord step, long stepRunId, int attempt) {
         if (repository.hasBudgetReservation(stepRunId)) return true;
@@ -280,7 +538,9 @@ public class AgentRunWorker {
             String idempotencyKey,
             Map<String, Object> input
     ) {
-        return executeReadStep(task, run, plan, step, stepRunId, attempt, idempotencyKey, input, null);
+        return executeReadStep(
+                task, run, plan, step, stepRunId, attempt, idempotencyKey, input,
+                null, false, false, null);
     }
 
     private boolean executeReadStep(
@@ -292,11 +552,49 @@ public class AgentRunWorker {
             int attempt,
             String idempotencyKey,
             Map<String, Object> input,
-            Map<String, Object> stagedResult
+            boolean delegatedWriteAuthorized
+    ) {
+        return executeReadStep(
+                task, run, plan, step, stepRunId, attempt, idempotencyKey, input, null,
+                delegatedWriteAuthorized, false, null);
+    }
+
+    private boolean executeReadStep(
+            TaskRecord task,
+            RunRecord run,
+            PlanRecord plan,
+            PlanStepRecord step,
+            long stepRunId,
+            int attempt,
+            String idempotencyKey,
+            Map<String, Object> input,
+            Map<String, Object> stagedResult,
+            boolean delegatedWriteAuthorized
+    ) {
+        return executeReadStep(
+                task, run, plan, step, stepRunId, attempt, idempotencyKey, input,
+                stagedResult, delegatedWriteAuthorized, false, null);
+    }
+
+    private boolean executeReadStep(
+            TaskRecord task,
+            RunRecord run,
+            PlanRecord plan,
+            PlanStepRecord step,
+            long stepRunId,
+            int attempt,
+            String idempotencyKey,
+            Map<String, Object> input,
+            Map<String, Object> stagedResult,
+            boolean delegatedWriteAuthorized,
+            boolean parallelBranch,
+            Map<String, Object> branchBudget
     ) {
         input = withLatestInput(run.id(), input);
         RunRecord beforeCall = repository.findRun(run.id()).orElse(run);
-        Map<String, Object> remaining = remainingBudget(beforeCall);
+        Map<String, Object> remaining = branchBudget == null
+                ? remainingBudget(beforeCall)
+                : new LinkedHashMap<>(branchBudget);
         // The same controller-owned Artifact snapshot is used both as synthesis input and
         // as the sensitivity authority. Upstream result text/flags never decide this boundary.
         List<Map<String, Object>> consumedArtifacts = repository.listArtifacts(task.id());
@@ -325,6 +623,17 @@ public class AgentRunWorker {
             request.put("artifacts", consumedArtifacts);
             request.put("idempotencyKey", idempotencyKey);
             request.put("remainingBudget", remaining);
+            request.put("delegatedWriteAuthorized", delegatedWriteAuthorized);
+            if (delegatedWriteAuthorized) {
+                RuntimeDecision writeDecision = authorizeDelegation(
+                        task, run, stepRunId, step, input);
+                if (!writeDecision.allowed() || !writeDecision.autoExecuteWrite()) {
+                    failDelegation(task, run, stepRunId, writeDecision);
+                    return false;
+                }
+                request.put("grantVersion", writeDecision.grantVersion());
+                request.put("authorizationDecisionId", String.valueOf(writeDecision.authorizationDecisionId()));
+            }
             try {
                 long wallTimeMillis = Math.max(1, longValue(remaining.get("wallTimeMillis")));
                 result = callWithLeaseHeartbeat(run.id(), () -> decisions.executeStep(
@@ -356,9 +665,15 @@ public class AgentRunWorker {
                 || costMicros > longValue(remaining.get("costMicros"))
                 || elapsedMillis > longValue(remaining.get("wallTimeMillis")))) {
             repository.finishStep(stepRunId, AgentStepStatus.FAILED,
-                    Map.of("summary", "工具返回的实际消耗超过调用前授予的剩余预算，结果未被采纳。"),
-                    null, fingerprint, "BUDGET_PROTOCOL_VIOLATION");
-            finishWithBudgetStop(task, repository.findRun(run.id()).orElse(beforeCall), List.of("postCallUsage"));
+                    Map.of("summary", parallelBranch
+                            ? "并行分支超过其独立预算，结果未被采纳。"
+                            : "工具返回的实际消耗超过调用前授予的剩余预算，结果未被采纳。"),
+                    null, fingerprint,
+                    parallelBranch ? "BRANCH_BUDGET_EXCEEDED" : "BUDGET_PROTOCOL_VIOLATION");
+            if (!parallelBranch) {
+                finishWithBudgetStop(
+                        task, repository.findRun(run.id()).orElse(beforeCall), List.of("postCallUsage"));
+            }
             return false;
         }
         if (!recoveringStagedResult) {
@@ -387,6 +702,7 @@ public class AgentRunWorker {
             repository.createCheckpoint(run.id(), "STEP_FAILED", run.planVersion(), stepRunId, aggregate,
                     map(result.get("externalStateHashes")));
             events.publish(task.id(), "step.failed", Map.of("stepRunId", stepRunId, "errorCode", errorCode, "retryable", bool(result.get("retryable"))));
+            if (parallelBranch) return false;
             if (bool(result.get("retryable")) && attempt <= run.budgetLimit().maxRetriesPerStep()) return true;
             if (!completeRequestedPause(task.id(), run.id())) {
                 stopForInput(task, repository.findRun(run.id()).orElse(run), errorCode, summary.isBlank() ? "工具执行失败，需要用户处理。" : summary);
@@ -394,8 +710,11 @@ public class AgentRunWorker {
             return false;
         }
         AgentStepStatus recordedStatus = status.equals("PARTIAL")
-                ? AgentStepStatus.WAITING_INPUT
+                ? (parallelBranch ? AgentStepStatus.FAILED : AgentStepStatus.WAITING_INPUT)
                 : AgentStepStatus.SUCCEEDED;
+        if (delegatedWriteAuthorized && status.equals("SUCCESS") && delegationGuard != null) {
+            delegationGuard.captureCompensation(task, stepRunId, step.toolRef(), result);
+        }
         repository.finishStep(stepRunId, recordedStatus, result, dataRef, fingerprint,
                 status.equals("PARTIAL") ? "PARTIAL_RESULT" : null);
         repository.createCheckpoint(run.id(), "STEP_SUCCEEDED", run.planVersion(), stepRunId, aggregate,
@@ -418,6 +737,10 @@ public class AgentRunWorker {
                     "flags", securityFlags,
                     "action", "UNTRUSTED_INSTRUCTIONS_IGNORED"
             ));
+            if (delegationGuard != null) {
+                delegationGuard.captureSecurityBoundary(
+                        task, stepRunId, step.toolRef(), securityFlags);
+            }
         }
         events.publish(task.id(), "step.completed", Map.of(
                 "stepRunId", stepRunId,
@@ -429,7 +752,8 @@ public class AgentRunWorker {
                 "budgetUsed", aggregate.toMap(),
                 "usageRatio", budgetGuard.usageRatio(run.budgetLimit(), aggregate)
         ));
-        if (completeRequestedPause(task.id(), run.id())) return false;
+        if (!parallelBranch && completeRequestedPause(task.id(), run.id())) return false;
+        if (parallelBranch) return status.equals("SUCCESS");
         if (noProgressCount >= run.budgetLimit().maxConsecutiveNoProgress()) {
             stopForInput(task, repository.findRun(run.id()).orElse(run), "NO_PROGRESS", "连续调用没有获得新信息，执行已停止。");
             return false;
@@ -596,6 +920,53 @@ public class AgentRunWorker {
         repository.updateRunStatus(run.id(), "RUNNING", "FAILED");
         repository.transitionTaskFromCurrent(task.id(), AgentTaskStatus.RUNNING, AgentTaskStatus.FAILED);
         events.publish(task.id(), "step.failed", Map.of("stepRunId", stepRunId, "errorCode", policy.errorCode(), "policyRejected", true));
+    }
+
+    private RuntimeDecision authorizeDelegation(
+            TaskRecord task,
+            RunRecord run,
+            Long stepRunId,
+            PlanStepRecord step,
+            Map<String, Object> input
+    ) {
+        if (delegationGuard == null) return RuntimeDecision.interactive();
+        return delegationGuard.authorize(
+                task,
+                run.id(),
+                stepRunId,
+                step.toolRef(),
+                step.riskLevel(),
+                step.writeIntent(),
+                input
+        );
+    }
+
+    private void failDelegation(
+            TaskRecord task,
+            RunRecord run,
+            Long existingStepRunId,
+            RuntimeDecision decision
+    ) {
+        long stepRunId = existingStepRunId == null ? 0 : existingStepRunId;
+        if (existingStepRunId != null) {
+            repository.finishStep(
+                    stepRunId,
+                    AgentStepStatus.FAILED,
+                    Map.of("summary", "当前动作未满足持续委托边界。"),
+                    null,
+                    null,
+                    decision.reasonCode()
+            );
+        }
+        repository.createCheckpoint(
+                run.id(), "DELEGATION_REJECTED", run.planVersion(), existingStepRunId, run.budgetUsed());
+        repository.updateRunStatus(run.id(), "RUNNING", "AWAITING_INPUT");
+        repository.transitionTaskFromCurrent(task.id(), AgentTaskStatus.RUNNING, AgentTaskStatus.AWAITING_INPUT);
+        events.publish(task.id(), "authorization.denied", Map.of(
+                "authorizationDecisionId", decision.authorizationDecisionId(),
+                "reasonCode", decision.reasonCode(),
+                "grantVersion", decision.grantVersion()
+        ));
     }
 
     private void failConstraint(TaskRecord task, RunRecord run, Long existingStepRunId, String reason) {
@@ -773,6 +1144,18 @@ public class AgentRunWorker {
 
     private static long longValue(Object value) {
         return value instanceof Number number ? number.longValue() : 0;
+    }
+
+    private static int intValue(Object value) {
+        if (value instanceof Number number) return number.intValue();
+        if (value instanceof String text) {
+            try {
+                return Integer.parseInt(text);
+            } catch (NumberFormatException ignored) {
+                return 0;
+            }
+        }
+        return 0;
     }
 
     private static boolean bool(Object value) {

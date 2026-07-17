@@ -41,6 +41,12 @@ mybatis-plus:
     db-config:
       id-type: assign_id
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
 ai:
   service:
     base-url: ${AI_SERVICE_BASE_URL:http://localhost:8000}
@@ -76,3 +82,14 @@ app:
   rate-limit:
     auth-per-minute: ${AUTH_RATE_LIMIT_PER_MINUTE:20}
     chat-per-minute: ${CHAT_RATE_LIMIT_PER_MINUTE:60}
+  mission:
+    enabled: ${MISSION_ENABLED:false}
+    execution-enabled: ${MISSION_EXECUTION_ENABLED:false}
+    r1-enabled: ${MISSION_R1_ENABLED:false}
+    shadow-only: ${MISSION_SHADOW_ONLY:false}
+    enabled-users: ${MISSION_ENABLED_USERS:}
+    enabled-templates: ${MISSION_ENABLED_TEMPLATES:project-health,research-weekly,release-readiness}
+    enabled-r1-tools: ${MISSION_ENABLED_R1_TOOLS:todo.propose,file.patch.propose}
+    scheduler-scan-millis: ${MISSION_SCHEDULER_SCAN_MILLIS:15000}
+  agent-task:
+    max-parallel-read-branches: ${AGENT_TASK_MAX_PARALLEL_READ_BRANCHES:3}

@@ -35,7 +35,7 @@ public class AgentEventPublisher {
         emitter.onTimeout(() -> remove(taskId, emitter));
         emitter.onError(ignored -> remove(taskId, emitter));
         for (AgentTaskRepository.EventRecord event : repository.listEvents(taskId, afterSequence, 1000)) {
-            sendOne(emitter, event.sequence(), event.eventType(), event.payload());
+            sendOne(emitter, taskId, event.sequence(), event.eventType(), event.payload());
         }
         return emitter;
     }
@@ -54,10 +54,16 @@ public class AgentEventPublisher {
     private void send(long taskId, long sequence, String eventType, Map<String, Object> payload) {
         List<SseEmitter> subscribers = emitters.get(taskId);
         if (subscribers == null) return;
-        subscribers.forEach(emitter -> sendOne(emitter, sequence, eventType, payload));
+        subscribers.forEach(emitter -> sendOne(emitter, taskId, sequence, eventType, payload));
     }
 
-    private void sendOne(SseEmitter emitter, long sequence, String eventType, Map<String, Object> payload) {
+    private void sendOne(
+            SseEmitter emitter,
+            long taskId,
+            long sequence,
+            String eventType,
+            Map<String, Object> payload
+    ) {
         try {
             emitter.send(SseEmitter.event()
                     .id(String.valueOf(sequence))
@@ -69,7 +75,9 @@ public class AgentEventPublisher {
                             "occurredAt", java.time.OffsetDateTime.now(ZoneOffset.UTC).toString()
                     )));
         } catch (IOException exc) {
-            emitter.complete();
+            // An I/O failure means the client has already disconnected. Avoid
+            // a redundant completion dispatch, which Spring may log as Broken pipe.
+            remove(taskId, emitter);
         }
     }
 

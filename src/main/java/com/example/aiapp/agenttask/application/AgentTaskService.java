@@ -16,6 +16,7 @@ import com.example.aiapp.agenttask.infrastructure.repository.AgentTaskRepository
 import com.example.aiapp.agenttask.infrastructure.repository.AgentTaskRepository.RunRecord;
 import com.example.aiapp.agenttask.infrastructure.repository.AgentTaskRepository.TaskRecord;
 import com.example.aiapp.agenttask.infrastructure.worker.AgentRunWorker;
+import com.example.aiapp.mission.infrastructure.MissionRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,8 +28,10 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class AgentTaskService {
@@ -98,6 +101,56 @@ public class AgentTaskService {
         return detail(userId, taskId);
     }
 
+    @Transactional
+    public Map<String, Object> createDelegatedRun(
+            long userId,
+            long missionId,
+            long occurrenceId,
+            int grantVersion,
+            Map<String, Object> missionPayload,
+            MissionRepository missionRepository
+    ) {
+        String key = "mission-occurrence-" + occurrenceId;
+        Map<String, Object> request = new LinkedHashMap<>(missionPayload);
+        request.put("templateId", agentTaskTemplate(text(missionPayload.get("templateId"))));
+        request.putIfAbsent("autonomyLevel", 1);
+        Map<String, Object> created = create(userId, key, request);
+        long taskId = longValue(created.get("id"));
+        missionRepository.linkDelegatedTask(taskId, missionId, occurrenceId, grantVersion);
+
+        Map<String, Object> planned = created;
+        if ("DRAFT".equals(text(created.get("status")))) {
+            planned = generatePlan(
+                    userId,
+                    taskId,
+                    longValue(created.get("version")),
+                    key + "-plan"
+            );
+        }
+        int planVersion = integer(planned.get("activePlanVersion"), 0);
+        if (planVersion <= 0) throw conflict("持续任务未生成有效计划。");
+
+        Map<String, Object> approved = planned;
+        if ("AWAITING_PLAN_APPROVAL".equals(text(planned.get("status")))) {
+            approved = approvePlan(
+                    userId,
+                    taskId,
+                    planVersion,
+                    longValue(planned.get("version")),
+                    key + "-approve"
+            );
+        }
+        if ("READY".equals(text(approved.get("status")))) {
+            return start(
+                    userId,
+                    taskId,
+                    longValue(approved.get("version")),
+                    key + "-start"
+            );
+        }
+        return approved;
+    }
+
     public Map<String, Object> list(long userId, String status, int limit) {
         List<Map<String, Object>> items = repository.listTasks(userId, status, limit).stream()
                 .map(this::taskListItem)
@@ -115,6 +168,7 @@ public class AgentTaskService {
             repository.findRun(task.currentRunId()).ifPresent(run -> {
                 result.put("run", runMap(run));
                 result.put("stepRuns", repository.listStepRuns(run.id()));
+                result.put("subtaskGroups", repository.listSubtaskGroups(run.id()));
                 repository.findPendingPreview(run.id()).ifPresent(preview -> result.put("pendingChangePreview", previewMap(preview)));
             });
         }
@@ -143,7 +197,7 @@ public class AgentTaskService {
             request.put("projectId", task.projectId());
             request.put("conversationId", task.conversationId());
             request.put("budget", AgentBudget.DEFAULT.toMap());
-            request.put("toolCatalog", toolCatalog(task.autonomyLevel()));
+            request.put("toolCatalog", toolCatalog(task.autonomyLevel(), task.constraints()));
             Map<String, Object> generated = decisionClient.plan(request);
             List<Map<String, Object>> steps = mapList(generated.get("steps"));
             if (steps.isEmpty()) throw new IllegalStateException("Planner 没有返回可执行步骤。");
@@ -495,7 +549,7 @@ public class AgentTaskService {
         request.put("projectId", task.projectId());
         request.put("conversationId", task.conversationId());
         request.put("budget", budget.toMap());
-        request.put("toolCatalog", toolCatalog(task.autonomyLevel()));
+        request.put("toolCatalog", toolCatalog(task.autonomyLevel(), constraints));
         return request;
     }
 
@@ -650,11 +704,41 @@ public class AgentTaskService {
         };
     }
 
-    private static List<Map<String, Object>> toolCatalog(int autonomyLevel) {
+    private static List<Map<String, Object>> toolCatalog(
+            int autonomyLevel,
+            Map<String, Object> constraints
+    ) {
+        boolean delegated = constraints.containsKey("delegatedAllowedTools");
+        Set<String> delegatedAllowed = new LinkedHashSet<>();
+        if (delegated) {
+            list(constraints.get("delegatedAllowedTools")).stream()
+                    .map(String::valueOf)
+                    .map(String::trim)
+                    .filter(value -> !value.isBlank())
+                    .forEach(delegatedAllowed::add);
+        }
         List<Map<String, Object>> result = new ArrayList<>();
-        AgentPolicyEngine.READ_TOOLS.forEach(ref -> result.add(Map.of("toolRef", ref, "riskLevel", ref.equals("research.search") ? "EXTERNAL_READ" : "READ")));
-        if (autonomyLevel >= 2) AgentPolicyEngine.WRITE_TOOLS.forEach(ref -> result.add(Map.of("toolRef", ref, "riskLevel", "WRITE_LOW")));
+        AgentPolicyEngine.READ_TOOLS.stream()
+                .filter(ref -> !delegated || delegatedAllowed.contains(ref))
+                .forEach(ref -> result.add(Map.of(
+                        "toolRef", ref,
+                        "riskLevel", ref.equals("research.search") ? "EXTERNAL_READ" : "READ"
+                )));
+        if (autonomyLevel >= 2) {
+            AgentPolicyEngine.WRITE_TOOLS.stream()
+                    .filter(ref -> !delegated || delegatedAllowed.contains(ref))
+                    .forEach(ref -> result.add(Map.of("toolRef", ref, "riskLevel", "WRITE_LOW")));
+        }
         return result;
+    }
+
+    private static String agentTaskTemplate(String missionTemplate) {
+        return switch (missionTemplate) {
+            case "project-health" -> "project-inspection";
+            case "research-weekly" -> "research";
+            case "release-readiness" -> "release-check";
+            default -> missionTemplate;
+        };
     }
 
     private static void validateSteps(
@@ -666,6 +750,13 @@ public class AgentTaskService {
         if (steps.isEmpty() || steps.size() > AgentBudget.HARD_LIMIT.maxSteps()) {
             throw badRequest("计划步骤数量无效。");
         }
+        Set<String> delegatedAllowed = constraints.containsKey("delegatedAllowedTools")
+                ? list(constraints.get("delegatedAllowedTools")).stream()
+                        .map(String::valueOf)
+                        .map(String::trim)
+                        .filter(value -> !value.isBlank())
+                        .collect(java.util.stream.Collectors.toSet())
+                : null;
         java.util.Set<String> seen = new java.util.HashSet<>();
         for (Map<String, Object> step : steps) {
             String key = text(step.get("stepKey"));
@@ -673,6 +764,9 @@ public class AgentTaskService {
             boolean writeIntent = step.get("writeIntent") instanceof Boolean value && value;
             String riskLevel = text(step.get("riskLevel")).toUpperCase();
             if (key.isBlank() || !seen.add(key)) throw badRequest("计划步骤 key 不能为空或重复。");
+            if (delegatedAllowed != null && !delegatedAllowed.contains(toolRef)) {
+                throw badRequest("计划包含委托授权之外的工具。");
+            }
             if (writeIntent) {
                 if (autonomyLevel < 2 || !AgentPolicyEngine.WRITE_TOOLS.contains(toolRef) || !riskLevel.equals("WRITE_LOW")) {
                     throw badRequest("计划包含未授权的写步骤。");
@@ -752,6 +846,15 @@ public class AgentTaskService {
 
     private static Long nullableLong(Object value) {
         return value instanceof Number number ? number.longValue() : null;
+    }
+
+    private static long longValue(Object value) {
+        if (value instanceof Number number) return number.longValue();
+        try {
+            return value == null ? 0 : Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     private static int integer(Object value, int fallback) {

@@ -24,6 +24,17 @@ public class AgentTaskConfig {
         return executor;
     }
 
+    @Bean("agentSubtaskExecutor")
+    Executor agentSubtaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(3);
+        executor.setMaxPoolSize(3);
+        executor.setQueueCapacity(30);
+        executor.setThreadNamePrefix("agent-subtask-");
+        executor.initialize();
+        return executor;
+    }
+
     @Bean(name = "agentLeaseScheduler", destroyMethod = "shutdown")
     ScheduledExecutorService agentLeaseScheduler() {
         return Executors.newScheduledThreadPool(2, runnable -> {
