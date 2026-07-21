@@ -9,5 +9,7 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
 
     List<ChatMessageEntity> selectByConversationId(String conversationId);
 
+    ChatMessageEntity selectByConversationIdAndTurnId(String conversationId, String turnId);
+
     int deleteByConversationId(String conversationId);
 }

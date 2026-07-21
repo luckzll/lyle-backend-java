@@ -12,7 +12,11 @@ import com.example.aiapp.mission.infrastructure.python.MissionAiClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.time.DayOfWeek;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.TemporalAdjusters;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -59,14 +63,16 @@ class MissionServiceTest {
 
         Map<String, Object> detail = service.detail(7L, 10L);
 
+        LocalDate periodStart = LocalDate.now(ZoneOffset.UTC)
+                .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         assertThat(detail.get("periodUsage")).isEqualTo(Map.of(
                 "completedSteps", 2L,
                 "toolCalls", 2L,
                 "modelTokens", 0L,
                 "costMicros", 0L,
                 "wallTimeMillis", 2029L,
-                "periodStart", "2026-07-13T00:00Z",
-                "periodEnd", "2026-07-20T00:00Z"
+                "periodStart", periodStart + "T00:00Z",
+                "periodEnd", periodStart.plusWeeks(1) + "T00:00Z"
         ));
     }
 

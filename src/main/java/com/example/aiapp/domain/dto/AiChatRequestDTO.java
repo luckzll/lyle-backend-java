@@ -6,6 +6,7 @@ import java.util.Map;
 public record AiChatRequestDTO(
         String userId,
         String conversationId,
+        String turnId,
         Long projectId,
         String message,
         List<String> knowledgeBaseIds,

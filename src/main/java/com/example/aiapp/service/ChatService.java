@@ -13,5 +13,7 @@ public interface ChatService {
 
     void stream(Long userId, ChatRequestDTO request, Consumer<String> chunkConsumer);
 
+    ChatMessageVO cancelTurn(Long userId, String conversationId, String turnId);
+
     List<ChatMessageVO> listMessages(Long userId, String conversationId);
 }

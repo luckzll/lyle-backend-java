@@ -14,6 +14,11 @@ import org.slf4j.LoggerFactory;
 import reactor.netty.http.client.HttpClient;
 
 import java.time.Duration;
+import java.util.concurrent.Executor;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Configuration
 @EnableConfigurationProperties({
@@ -56,6 +61,27 @@ public class AppConfig {
                 .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(maxInMemorySize));
         builder.defaultHeader("X-Internal-Token", properties.internalToken());
         return builder.defaultHeader(HttpHeaders.USER_AGENT, "ai-app-backend").build();
+    }
+
+    @Bean(name = "chatGenerationExecutor", destroyMethod = "shutdown")
+    Executor chatGenerationExecutor() {
+        AtomicInteger threadSequence = new AtomicInteger();
+        return new ThreadPoolExecutor(
+                8,
+                64,
+                60,
+                TimeUnit.SECONDS,
+                new SynchronousQueue<>(),
+                runnable -> {
+                    Thread thread = new Thread(
+                            runnable,
+                            "chat-generation-" + threadSequence.incrementAndGet()
+                    );
+                    thread.setDaemon(false);
+                    return thread;
+                },
+                new ThreadPoolExecutor.AbortPolicy()
+        );
     }
 
     @Bean

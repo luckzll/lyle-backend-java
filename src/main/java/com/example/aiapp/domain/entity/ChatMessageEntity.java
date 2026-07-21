@@ -16,9 +16,15 @@ public class ChatMessageEntity {
     @TableField("conversation_id")
     private String conversationId;
 
+    @TableField("turn_id")
+    private String turnId;
+
     private String role;
 
     private String content;
+
+    @TableField("metadata_json")
+    private String metadataJson;
 
     @TableField("created_at")
     private LocalDateTime createdAt;
@@ -39,6 +45,14 @@ public class ChatMessageEntity {
         this.conversationId = conversationId;
     }
 
+    public String getTurnId() {
+        return turnId;
+    }
+
+    public void setTurnId(String turnId) {
+        this.turnId = turnId;
+    }
+
     public String getRole() {
         return role;
     }
@@ -53,6 +67,14 @@ public class ChatMessageEntity {
 
     public void setContent(String content) {
         this.content = content;
+    }
+
+    public String getMetadataJson() {
+        return metadataJson;
+    }
+
+    public void setMetadataJson(String metadataJson) {
+        this.metadataJson = metadataJson;
     }
 
     public LocalDateTime getCreatedAt() {

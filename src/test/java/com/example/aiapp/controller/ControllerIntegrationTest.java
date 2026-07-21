@@ -8,6 +8,7 @@ import com.example.aiapp.domain.dto.ChatRequestDTO;
 import com.example.aiapp.domain.dto.UpdateConversationDTO;
 import com.example.aiapp.domain.vo.AdminOverviewVO;
 import com.example.aiapp.domain.vo.AuthResponseVO;
+import com.example.aiapp.domain.vo.ChatMessageVO;
 import com.example.aiapp.domain.vo.ChatResponseVO;
 import com.example.aiapp.domain.vo.ConversationVO;
 import com.example.aiapp.domain.vo.FileUploadVO;
@@ -49,6 +50,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
@@ -121,6 +123,9 @@ class ControllerIntegrationTest {
 
     @MockBean
     ChatService chatService;
+
+    @MockBean(name = "chatGenerationExecutor")
+    Executor chatGenerationExecutor;
 
     @MockBean
     AdminService adminService;
@@ -703,6 +708,12 @@ class ControllerIntegrationTest {
     void chatStreamForwardsSseChunks() throws Exception {
         CountDownLatch responseHeadersReady = new CountDownLatch(1);
         doAnswer(invocation -> {
+            Runnable task = invocation.getArgument(0);
+            Thread worker = new Thread(task, "chat-generation-test");
+            worker.start();
+            return null;
+        }).when(chatGenerationExecutor).execute(any(Runnable.class));
+        doAnswer(invocation -> {
             assertThat(responseHeadersReady.await(5, TimeUnit.SECONDS)).isTrue();
             @SuppressWarnings("unchecked")
             Consumer<String> consumer = invocation.getArgument(2, Consumer.class);
@@ -732,6 +743,28 @@ class ControllerIntegrationTest {
         assertThat(body).contains("event: meta");
         assertThat(body).contains("preferences.visual.dislikes");
         assertThat(body).contains("\"status\":\"pending\"");
+    }
+
+    @Test
+    void chatTurnCancellationUsesAuthenticatedUserAndReturnsPersistedState() throws Exception {
+        when(chatService.cancelTurn(42L, "100", "turn-1")).thenReturn(new ChatMessageVO(
+                9L,
+                "100",
+                "turn-1",
+                "assistant",
+                "已停止生成。",
+                Map.of("phase", "FAILED", "imageBatch", Map.of("status", "CANCELLED")),
+                LocalDateTime.of(2026, 7, 21, 10, 0)
+        ));
+
+        mockMvc.perform(post("/chat/conversations/100/turns/turn-1/cancel")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.turnId").value("turn-1"))
+                .andExpect(jsonPath("$.content").value("已停止生成。"))
+                .andExpect(jsonPath("$.metadata.imageBatch.status").value("CANCELLED"));
+
+        verify(chatService).cancelTurn(42L, "100", "turn-1");
     }
 
     @Test
