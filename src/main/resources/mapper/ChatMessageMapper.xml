@@ -34,6 +34,23 @@
         LIMIT 1
     </select>
 
+    <select id="selectUserByConversationIdAndTurnId" resultType="com.example.aiapp.domain.entity.ChatMessageEntity">
+        SELECT
+            id,
+            conversation_id,
+            turn_id,
+            role,
+            content,
+            metadata_json,
+            created_at
+        FROM chat_message
+        WHERE conversation_id = #{conversationId}
+          AND turn_id = #{turnId}
+          AND role = 'user'
+        ORDER BY created_at DESC
+        LIMIT 1
+    </select>
+
     <delete id="deleteByConversationId">
         DELETE FROM chat_message
         WHERE conversation_id = #{conversationId}

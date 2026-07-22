@@ -2,6 +2,7 @@ package com.example.aiapp.service.impl;
 
 import com.example.aiapp.domain.dto.AiChatRequestDTO;
 import com.example.aiapp.domain.dto.AiChatResponseDTO;
+import com.example.aiapp.domain.dto.AiChatAttachmentDTO;
 import com.example.aiapp.domain.dto.ChatRequestDTO;
 import com.example.aiapp.domain.entity.ChatMessageEntity;
 import com.example.aiapp.domain.entity.ConversationEntity;
@@ -9,6 +10,7 @@ import com.example.aiapp.infrastructure.client.AiServiceClient;
 import com.example.aiapp.mapper.ChatMessageMapper;
 import com.example.aiapp.mapper.ConversationMapper;
 import com.example.aiapp.service.AiConfigService;
+import com.example.aiapp.service.ChatAttachmentService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -26,6 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -240,6 +243,157 @@ class ChatServiceImplTest {
         ArgumentCaptor<ChatMessageEntity> saved = ArgumentCaptor.forClass(ChatMessageEntity.class);
         verify(chatMessageMapper, org.mockito.Mockito.times(2)).insert(saved.capture());
         assertThat(saved.getAllValues().get(1).getContent()).isEqualTo("你好");
+    }
+
+    @Test
+    void streamCurrentImageAttachmentDoesNotAppendRecentHistoryImage() {
+        AiServiceClient aiServiceClient = mock(AiServiceClient.class);
+        AiConfigService aiConfigService = mock(AiConfigService.class);
+        ChatMessageMapper chatMessageMapper = mock(ChatMessageMapper.class);
+        ConversationMapper conversationMapper = mock(ConversationMapper.class);
+        ChatAttachmentService chatAttachmentService = mock(ChatAttachmentService.class);
+        ConversationEntity conversation = new ConversationEntity();
+        conversation.setId(100L);
+        conversation.setUserId(42L);
+        when(conversationMapper.selectByIdAndUserId(100L, 42L)).thenReturn(conversation);
+        when(aiConfigService.currentConfigMap()).thenReturn(Map.of());
+        when(chatMessageMapper.selectByConversationId("100")).thenReturn(List.of(
+                message("assistant", "历史紫色建筑图。\n![生成图片](https://example.com/purple-building.png)")
+        ));
+        AiChatAttachmentDTO currentImage = new AiChatAttachmentDTO(
+                "current-image",
+                "image",
+                "current.png",
+                "image/png",
+                8,
+                new AiChatAttachmentDTO.StorageObjectRefDTO(
+                        "file:///tmp/current.png",
+                        "LOCAL",
+                        "chat-attachments",
+                        "42/current.png",
+                        "current.png",
+                        "image/png",
+                        8
+                )
+        );
+        when(chatAttachmentService.requireReady(42L, List.of("current-image"))).thenReturn(List.of(currentImage));
+        when(aiServiceClient.streamChat(any())).thenReturn(Flux.just(
+                "event: delta\ndata: {\"text\":\"只分析本轮图片\"}\n\n",
+                "event: done\ndata: {}\n\n"
+        ));
+        ChatServiceImpl service = new ChatServiceImpl(
+                aiServiceClient,
+                aiConfigService,
+                chatMessageMapper,
+                conversationMapper,
+                new ObjectMapper()
+        );
+        service.setChatAttachmentService(chatAttachmentService);
+
+        service.stream(42L, new ChatRequestDTO(
+                "100",
+                "turn-current-image",
+                null,
+                "请分析这张图片",
+                List.of(),
+                List.of("current-image")
+        ), chunk -> {
+        });
+
+        ArgumentCaptor<AiChatRequestDTO> request = ArgumentCaptor.forClass(AiChatRequestDTO.class);
+        verify(aiServiceClient).streamChat(request.capture());
+        assertThat(request.getValue().message())
+                .isEqualTo("请分析这张图片")
+                .doesNotContain("purple-building.png");
+        assertThat(request.getValue().attachments()).containsExactly(currentImage);
+        verify(chatMessageMapper, never()).selectByConversationId("100");
+    }
+
+    @Test
+    void retryFailedStreamReusesOriginalTurnUserMessageAndAttachments() {
+        AiServiceClient aiServiceClient = mock(AiServiceClient.class);
+        AiConfigService aiConfigService = mock(AiConfigService.class);
+        ChatMessageMapper chatMessageMapper = mock(ChatMessageMapper.class);
+        ConversationMapper conversationMapper = mock(ConversationMapper.class);
+        ChatAttachmentService chatAttachmentService = mock(ChatAttachmentService.class);
+        ConversationEntity conversation = new ConversationEntity();
+        conversation.setId(100L);
+        conversation.setUserId(42L);
+        when(conversationMapper.selectByIdAndUserId(100L, 42L)).thenReturn(conversation);
+        when(aiConfigService.currentConfigMap()).thenReturn(Map.of());
+
+        ChatMessageEntity user = message("user", "请分析原附件");
+        user.setId(98L);
+        user.setTurnId("turn-retry");
+        ChatMessageEntity assistant = message("assistant", "回复失败，请稍后重试。");
+        assistant.setId(99L);
+        assistant.setTurnId("turn-retry");
+        assistant.setMetadataJson("{\"turnId\":\"turn-retry\",\"phase\":\"FAILED\",\"statusText\":\"回复失败\"}");
+        when(chatMessageMapper.selectByConversationIdAndTurnId("100", "turn-retry")).thenReturn(assistant);
+        when(chatMessageMapper.selectUserByConversationIdAndTurnId("100", "turn-retry")).thenReturn(user);
+
+        AiChatAttachmentDTO attachment = new AiChatAttachmentDTO(
+                "attachment-1",
+                "image",
+                "acceptance.png",
+                "image/png",
+                8,
+                new AiChatAttachmentDTO.StorageObjectRefDTO(
+                        "file:///tmp/acceptance.png",
+                        "LOCAL",
+                        "chat-attachments",
+                        "42/attachment-1.png",
+                        "acceptance.png",
+                        "image/png",
+                        8
+                )
+        );
+        when(chatAttachmentService.requireAttachedForRetry(
+                42L,
+                "100",
+                98L,
+                List.of("attachment-1")
+        )).thenReturn(List.of(attachment));
+        when(aiServiceClient.streamChat(any())).thenReturn(Flux.just(
+                "event: delta\ndata: {\"text\":\"重试成功\"}\n\n",
+                "event: turn.status\ndata: {\"turnId\":\"turn-retry\",\"phase\":\"COMPLETED\",\"message\":\"回复完成\"}\n\n",
+                "event: done\ndata: {}\n\n"
+        ));
+
+        ChatServiceImpl service = new ChatServiceImpl(
+                aiServiceClient,
+                aiConfigService,
+                chatMessageMapper,
+                conversationMapper,
+                new ObjectMapper()
+        );
+        service.setChatAttachmentService(chatAttachmentService);
+
+        service.stream(42L, new ChatRequestDTO(
+                "100",
+                "turn-retry",
+                null,
+                "被篡改的重试文字",
+                List.of(),
+                List.of("attachment-1"),
+                true
+        ), chunk -> {
+        });
+
+        ArgumentCaptor<AiChatRequestDTO> request = ArgumentCaptor.forClass(AiChatRequestDTO.class);
+        verify(aiServiceClient).streamChat(request.capture());
+        assertThat(request.getValue().turnId()).isEqualTo("turn-retry");
+        assertThat(request.getValue().message()).isEqualTo("请分析原附件");
+        assertThat(request.getValue().attachments()).containsExactly(attachment);
+        assertThat(assistant.getContent()).isEqualTo("重试成功");
+        assertThat(assistant.getMetadataJson()).contains("\"phase\":\"COMPLETED\"");
+        verify(chatMessageMapper, never()).insert(any(ChatMessageEntity.class));
+        verify(chatAttachmentService).requireAttachedForRetry(
+                42L,
+                "100",
+                98L,
+                List.of("attachment-1")
+        );
     }
 
     @Test

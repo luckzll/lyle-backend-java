@@ -11,5 +11,7 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
 
     ChatMessageEntity selectByConversationIdAndTurnId(String conversationId, String turnId);
 
+    ChatMessageEntity selectUserByConversationIdAndTurnId(String conversationId, String turnId);
+
     int deleteByConversationId(String conversationId);
 }

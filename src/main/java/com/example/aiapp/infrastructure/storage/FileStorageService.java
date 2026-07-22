@@ -6,6 +6,7 @@ import io.minio.GetObjectArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import io.minio.RemoveObjectArgs;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -70,6 +71,30 @@ public class FileStorageService {
             return Files.newInputStream(target);
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to read stored file.", exception);
+        }
+    }
+
+    public void delete(String bucketName, String objectName) {
+        if (properties.enabled()) {
+            try {
+                minioClient.removeObject(RemoveObjectArgs.builder()
+                        .bucket(properties.bucket())
+                        .object(objectName)
+                        .build());
+                return;
+            } catch (Exception exception) {
+                throw new IllegalStateException("Failed to delete MinIO object.", exception);
+            }
+        }
+        Path root = Path.of(System.getProperty("user.dir")).getParent().resolve("storage").normalize();
+        Path target = root.resolve(bucketName).resolve(objectName).normalize();
+        if (!target.startsWith(root.resolve(bucketName).normalize())) {
+            throw new IllegalArgumentException("Invalid storage object path.");
+        }
+        try {
+            Files.deleteIfExists(target);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to delete stored file.", exception);
         }
     }
 

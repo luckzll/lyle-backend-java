@@ -1,6 +1,7 @@
 package com.example.aiapp.domain.vo;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 public record ChatMessageVO(
@@ -10,6 +11,18 @@ public record ChatMessageVO(
         String role,
         String content,
         Map<String, Object> metadata,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        List<ChatAttachmentVO> attachments
 ) {
+    public ChatMessageVO(
+            Long id,
+            String conversationId,
+            String turnId,
+            String role,
+            String content,
+            Map<String, Object> metadata,
+            LocalDateTime createdAt
+    ) {
+        this(id, conversationId, turnId, role, content, metadata, createdAt, List.of());
+    }
 }

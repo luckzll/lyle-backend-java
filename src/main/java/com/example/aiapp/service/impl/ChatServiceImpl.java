@@ -2,6 +2,7 @@ package com.example.aiapp.service.impl;
 
 import com.example.aiapp.domain.dto.AiChatRequestDTO;
 import com.example.aiapp.domain.dto.AiChatResponseDTO;
+import com.example.aiapp.domain.dto.AiChatAttachmentDTO;
 import com.example.aiapp.domain.dto.ChatRequestDTO;
 import com.example.aiapp.domain.entity.ChatMessageEntity;
 import com.example.aiapp.domain.entity.ConversationEntity;
@@ -11,11 +12,13 @@ import com.example.aiapp.infrastructure.client.AiServiceClient;
 import com.example.aiapp.mapper.ChatMessageMapper;
 import com.example.aiapp.mapper.ConversationMapper;
 import com.example.aiapp.service.AiConfigService;
+import com.example.aiapp.service.ChatAttachmentService;
 import com.example.aiapp.service.ChatService;
 import com.example.aiapp.utils.StringUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
@@ -34,6 +37,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.springframework.http.HttpStatus.NOT_FOUND;
+import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
 @Service
 public class ChatServiceImpl implements ChatService {
@@ -51,6 +55,7 @@ public class ChatServiceImpl implements ChatService {
     private final ChatMessageMapper chatMessageMapper;
     private final ConversationMapper conversationMapper;
     private final ObjectMapper objectMapper;
+    private ChatAttachmentService chatAttachmentService;
     private final ConcurrentMap<String, ActiveTurn> activeTurns = new ConcurrentHashMap<>();
 
     public ChatServiceImpl(
@@ -67,14 +72,30 @@ public class ChatServiceImpl implements ChatService {
         this.objectMapper = objectMapper;
     }
 
+    @Autowired
+    void setChatAttachmentService(ChatAttachmentService chatAttachmentService) {
+        this.chatAttachmentService = chatAttachmentService;
+    }
+
     @Override
     public ChatResponseVO send(Long userId, ChatRequestDTO request) {
         String conversationId = StringUtils.isBlank(request.conversationId())
                 ? UUID.randomUUID().toString()
                 : request.conversationId();
         ensureConversationOwnedByUserIfPersisted(userId, conversationId);
+        if (!StringUtils.isBlank(request.turnId())) {
+            ChatMessageEntity existing = chatMessageMapper.selectByConversationIdAndTurnId(conversationId, request.turnId());
+            if (existing != null) {
+                return existingResponse(conversationId, existing);
+            }
+        }
 
-        String aiMessage = withRecentImageContext(conversationId, request.message());
+        String userMessage = normalizedMessage(request.message(), request.attachmentIds());
+        var attachments = chatAttachmentService == null
+                ? List.<com.example.aiapp.domain.dto.AiChatAttachmentDTO>of()
+                : chatAttachmentService.requireReady(userId, request.attachmentIds());
+
+        String aiMessage = withRecentImageContextUnlessCurrentImage(conversationId, userMessage, attachments);
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
@@ -83,10 +104,14 @@ public class ChatServiceImpl implements ChatService {
                 aiMessage,
                 request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds(),
                 false,
-                aiConfigService.currentConfigMap()
+                aiConfigService.currentConfigMap(),
+                attachments
         );
 
-        saveMessage(conversationId, "user", historyContent(request.message()));
+        ChatMessageEntity userEntity = saveMessage(conversationId, request.turnId(), "user", historyContent(userMessage), Map.of());
+        if (chatAttachmentService != null) {
+            chatAttachmentService.bind(userId, conversationId, userEntity.getId(), request.attachmentIds());
+        }
         AiChatResponseDTO aiResponse = aiServiceClient.chat(aiRequest);
         saveMessage(conversationId, "assistant", aiResponse.answer());
         return new ChatResponseVO(
@@ -116,8 +141,49 @@ public class ChatServiceImpl implements ChatService {
                 ? UUID.randomUUID().toString()
                 : request.turnId();
         ensureConversationOwnedByUserIfPersisted(userId, conversationId);
+        ChatMessageEntity existing = chatMessageMapper.selectByConversationIdAndTurnId(conversationId, turnId);
+        boolean retrying = request.retry();
+        if (retrying && existing == null) {
+            throw new ResponseStatusException(NOT_FOUND, "要重试的对话轮次不存在");
+        }
+        if (retrying && !"FAILED".equals(stringValue(readMetadata(existing.getMetadataJson()).get("phase")))) {
+            throw new ResponseStatusException(BAD_REQUEST, "只能重试失败或已停止的轮次");
+        }
+        if (existing != null && !retrying) {
+            Map<String, Object> metadata = readMetadata(existing.getMetadataJson());
+            if (!StringUtils.isBlank(existing.getContent())) {
+                chunkConsumer.accept(sse("delta", Map.of("text", existing.getContent())));
+            }
+            chunkConsumer.accept(sse("turn.status", Map.of(
+                    "turnId", turnId,
+                    "phase", stringValue(metadata.getOrDefault("phase", "COMPLETED")),
+                    "message", stringValue(metadata.getOrDefault("statusText", "回复完成"))
+            )));
+            chunkConsumer.accept(sse("done", Map.of("turnId", turnId)));
+            return;
+        }
 
-        String aiMessage = withRecentImageContext(conversationId, request.message());
+        ChatMessageEntity retryUser = retrying
+                ? chatMessageMapper.selectUserByConversationIdAndTurnId(conversationId, turnId)
+                : null;
+        if (retrying && retryUser == null) {
+            throw new ResponseStatusException(NOT_FOUND, "要重试的用户消息不存在");
+        }
+        String userMessage = retrying
+                ? retryUser.getContent()
+                : normalizedMessage(request.message(), request.attachmentIds());
+        var attachments = chatAttachmentService == null
+                ? List.<com.example.aiapp.domain.dto.AiChatAttachmentDTO>of()
+                : retrying
+                    ? chatAttachmentService.requireAttachedForRetry(
+                            userId,
+                            conversationId,
+                            retryUser.getId(),
+                            request.attachmentIds()
+                    )
+                    : chatAttachmentService.requireReady(userId, request.attachmentIds());
+
+        String aiMessage = withRecentImageContextUnlessCurrentImage(conversationId, userMessage, attachments);
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
@@ -126,10 +192,16 @@ public class ChatServiceImpl implements ChatService {
                 aiMessage,
                 request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds(),
                 true,
-                aiConfigService.currentConfigMap()
+                aiConfigService.currentConfigMap(),
+                attachments
         );
 
-        saveMessage(conversationId, "user", historyContent(request.message()));
+        if (!retrying) {
+            ChatMessageEntity userEntity = saveMessage(conversationId, turnId, "user", historyContent(userMessage), Map.of());
+            if (chatAttachmentService != null) {
+                chatAttachmentService.bind(userId, conversationId, userEntity.getId(), request.attachmentIds());
+            }
+        }
         StringBuilder assistantAnswer = new StringBuilder();
         StringBuilder sseBuffer = new StringBuilder();
         AtomicReference<String> upstreamPhase = new AtomicReference<>();
@@ -137,13 +209,22 @@ public class ChatServiceImpl implements ChatService {
         initialMetadata.put("turnId", turnId);
         initialMetadata.put("phase", "THINKING");
         initialMetadata.put("statusText", "正在理解你的需求…");
-        ChatMessageEntity assistantMessage = saveMessage(
-                conversationId,
-                turnId,
-                "assistant",
-                "",
-                initialMetadata
-        );
+        ChatMessageEntity assistantMessage;
+        if (retrying) {
+            assistantMessage = existing;
+            assistantMessage.setContent("");
+            assistantMessage.setMetadataJson(writeMetadata(initialMetadata));
+            chatMessageMapper.updateById(assistantMessage);
+            touchConversation(conversationId);
+        } else {
+            assistantMessage = saveMessage(
+                    conversationId,
+                    turnId,
+                    "assistant",
+                    "",
+                    initialMetadata
+            );
+        }
         ActiveTurn activeTurn = new ActiveTurn(
                 conversationId,
                 turnId,
@@ -611,6 +692,19 @@ public class ChatServiceImpl implements ChatService {
         return DATA_IMAGE_PATTERN.matcher(content).replaceAll("[图片 data URL 已省略]");
     }
 
+    private ChatResponseVO existingResponse(String conversationId, ChatMessageEntity existing) {
+        return new ChatResponseVO(
+                conversationId, existing.getContent(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), List.of(), List.of(), List.of(), Map.of(), Map.of()
+        );
+    }
+
+    private String normalizedMessage(String message, List<String> attachmentIds) {
+        if (!StringUtils.isBlank(message)) return message.trim();
+        if (attachmentIds != null && !attachmentIds.isEmpty()) return "请分析这些附件";
+        throw new ResponseStatusException(BAD_REQUEST, "消息或附件不能为空");
+    }
+
     private String withRecentImageContext(String conversationId, String message) {
         if (StringUtils.isBlank(message) || containsImageRef(message) || !looksLikeImageFollowUp(message)) {
             return message;
@@ -624,6 +718,16 @@ public class ChatServiceImpl implements ChatService {
             enriched.append("\n图片").append(index + 1).append("：").append(imageUrls.get(index));
         }
         return enriched.toString();
+    }
+
+    private String withRecentImageContextUnlessCurrentImage(
+            String conversationId,
+            String message,
+            List<AiChatAttachmentDTO> attachments
+    ) {
+        boolean hasCurrentImage = attachments != null && attachments.stream()
+                .anyMatch(attachment -> attachment != null && "image".equalsIgnoreCase(attachment.kind()));
+        return hasCurrentImage ? message : withRecentImageContext(conversationId, message);
     }
 
     private boolean looksLikeImageFollowUp(String message) {
@@ -780,7 +884,8 @@ public class ChatServiceImpl implements ChatService {
                 entity.getRole(),
                 entity.getContent(),
                 readMetadata(entity.getMetadataJson()),
-                entity.getCreatedAt()
+                entity.getCreatedAt(),
+                chatAttachmentService == null ? List.of() : chatAttachmentService.listForMessage(entity.getId())
         );
     }
 

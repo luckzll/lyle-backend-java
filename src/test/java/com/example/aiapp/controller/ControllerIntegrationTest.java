@@ -19,6 +19,7 @@ import com.example.aiapp.infrastructure.client.AiServiceClient;
 import com.example.aiapp.mapper.AiConfigMapper;
 import com.example.aiapp.mapper.AuditLogMapper;
 import com.example.aiapp.mapper.ChatMessageMapper;
+import com.example.aiapp.mapper.ChatAttachmentMapper;
 import com.example.aiapp.mapper.ConversationMapper;
 import com.example.aiapp.mapper.KnowledgeBaseMapper;
 import com.example.aiapp.mapper.KnowledgeFileMapper;
@@ -141,6 +142,9 @@ class ControllerIntegrationTest {
 
     @MockBean
     ChatMessageMapper chatMessageMapper;
+
+    @MockBean
+    ChatAttachmentMapper chatAttachmentMapper;
 
     @MockBean
     ConversationMapper conversationMapper;
