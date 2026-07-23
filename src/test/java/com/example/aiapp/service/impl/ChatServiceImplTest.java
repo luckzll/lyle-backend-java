@@ -220,7 +220,8 @@ class ChatServiceImplTest {
         when(conversationMapper.selectByIdAndUserId(100L, 42L)).thenReturn(conversation);
         when(aiConfigService.currentConfigMap()).thenReturn(Map.of());
         when(aiServiceClient.streamChat(any())).thenReturn(Flux.just(
-                "event: delta\ndata: {\"text\":\"你好\"}\n\n",
+                "event: delta\ndata: {\"text\":\"你",
+                "好\"}\n\n",
                 "event: done\ndata: {}\n\n"
         ));
         List<String> chunks = new ArrayList<>();
@@ -239,7 +240,8 @@ class ChatServiceImplTest {
                 .contains("\"phase\":\"RESPONDING\"")
                 .contains("\"phase\":\"COMPLETED\"")
                 .contains("event: delta")
-                .contains("\"text\":\"你好\"");
+                .contains("data: {\"text\":\"你好\"}\n\n")
+                .doesNotContain("\"text\":\"你event: turn.status");
         ArgumentCaptor<ChatMessageEntity> saved = ArgumentCaptor.forClass(ChatMessageEntity.class);
         verify(chatMessageMapper, org.mockito.Mockito.times(2)).insert(saved.capture());
         assertThat(saved.getAllValues().get(1).getContent()).isEqualTo("你好");

@@ -28,7 +28,8 @@ import java.util.concurrent.atomic.AtomicInteger;
         MinioProperties.class,
         QdrantProperties.class,
         RateLimitProperties.class,
-        TosProperties.class
+        TosProperties.class,
+        V63FeatureProperties.class
 })
 public class AppConfig {
 

@@ -636,6 +636,7 @@ public class AiServiceClient {
             String status,
             Long projectId,
             Long automationId,
+            boolean attentionOnly,
             String cursor,
             int limit
     ) {
@@ -649,6 +650,7 @@ public class AiServiceClient {
                         )
                         .queryParamIfPresent("projectId", java.util.Optional.ofNullable(projectId))
                         .queryParamIfPresent("automationId", java.util.Optional.ofNullable(automationId))
+                        .queryParam("attentionOnly", attentionOnly)
                         .queryParamIfPresent(
                                 "cursor",
                                 java.util.Optional.ofNullable(cursor).filter(value -> !value.isBlank())

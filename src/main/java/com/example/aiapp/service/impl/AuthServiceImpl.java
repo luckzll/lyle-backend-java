@@ -35,7 +35,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public AuthResponseVO register(AuthRequestDTO request) {
         if (userMapper.selectByUsername(request.username()) != null) {
-            throw new ResponseStatusException(CONFLICT, "用户名已存在");
+            throw new ResponseStatusException(CONFLICT, "用户名或密码不正确，请重试。");
         }
 
         UserEntity entity = new UserEntity();
@@ -51,7 +51,7 @@ public class AuthServiceImpl implements AuthService {
     public AuthResponseVO login(AuthRequestDTO request) {
         UserEntity entity = userMapper.selectByUsername(request.username());
         if (entity == null || !matches(request.password(), entity.getPasswordHash())) {
-            throw new ResponseStatusException(UNAUTHORIZED, "用户名或密码错误");
+            throw new ResponseStatusException(UNAUTHORIZED, "用户名或密码不正确，请重试。");
         }
         return toResponse(entity);
     }

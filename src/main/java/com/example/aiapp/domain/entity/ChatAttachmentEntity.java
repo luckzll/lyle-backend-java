@@ -36,6 +36,14 @@ public class ChatAttachmentEntity {
     private Integer width;
     private Integer height;
     private Integer position;
+    @TableField("source_type")
+    private String sourceType;
+    @TableField("folder_group_id")
+    private String folderGroupId;
+    @TableField("folder_root")
+    private String folderRoot;
+    @TableField("relative_path")
+    private String relativePath;
     @TableField("created_at")
     private LocalDateTime createdAt;
     @TableField("attached_at")
@@ -75,6 +83,14 @@ public class ChatAttachmentEntity {
     public void setHeight(Integer height) { this.height = height; }
     public Integer getPosition() { return position; }
     public void setPosition(Integer position) { this.position = position; }
+    public String getSourceType() { return sourceType; }
+    public void setSourceType(String sourceType) { this.sourceType = sourceType; }
+    public String getFolderGroupId() { return folderGroupId; }
+    public void setFolderGroupId(String folderGroupId) { this.folderGroupId = folderGroupId; }
+    public String getFolderRoot() { return folderRoot; }
+    public void setFolderRoot(String folderRoot) { this.folderRoot = folderRoot; }
+    public String getRelativePath() { return relativePath; }
+    public void setRelativePath(String relativePath) { this.relativePath = relativePath; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getAttachedAt() { return attachedAt; }

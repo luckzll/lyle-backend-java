@@ -10,6 +10,11 @@ public record ChatAttachmentVO(
         String previewUrl,
         String downloadUrl,
         Integer width,
-        Integer height
+        Integer height,
+        Integer position,
+        String sourceType,
+        String folderGroupId,
+        String folderRoot,
+        String relativePath
 ) {
 }

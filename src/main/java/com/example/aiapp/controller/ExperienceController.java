@@ -3,6 +3,8 @@ package com.example.aiapp.controller;
 import com.example.aiapp.infrastructure.client.AiServiceClient;
 import com.example.aiapp.utils.CurrentUserUtils;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
 
@@ -23,6 +25,20 @@ public class ExperienceController {
     @PostMapping("/events")
     Map<String, Object> productEvent(@RequestBody Map<String, Object> request) {
         return ai.postJson("/ai/experience/events/{userId}", request, userId());
+    }
+
+    @PostMapping("/public-events")
+    Map<String, Object> publicProductEvent(@RequestBody Map<String, Object> request) {
+        Object eventType = request.get("eventType");
+        Object page = request.get("page");
+        if (!(eventType instanceof String type)
+                || !(type.equals("auth_view_total")
+                || type.equals("auth_submit_total")
+                || type.equals("auth_return_to_target_total"))
+                || !"login".equals(page)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only anonymous authentication metrics are accepted");
+        }
+        return ai.postJson("/ai/experience/events/{userId}", request, "anonymous-auth");
     }
 
     @GetMapping("/onboarding")
@@ -69,14 +85,31 @@ public class ExperienceController {
     Map<String, Object> results(@RequestParam(required = false) String status,
                                 @RequestParam(required = false) Long projectId,
                                 @RequestParam(required = false) Long automationId,
+                                @RequestParam(defaultValue = "false") boolean attentionOnly,
                                 @RequestParam(required = false) String cursor,
                                 @RequestParam(defaultValue = "50") int limit) {
-        return ai.getExperienceResults(userId(), status, projectId, automationId, cursor, limit);
+        return ai.getExperienceResults(userId(), status, projectId, automationId, attentionOnly, cursor, limit);
     }
 
     @GetMapping("/execution/results/{resultId}")
     Map<String, Object> result(@PathVariable long resultId) {
         return ai.getJson("/ai/experience/execution/{userId}/results/{resultId}", userId(), resultId);
+    }
+
+    @PostMapping("/execution/results/{resultId}/dismiss")
+    Map<String, Object> dismissResult(@PathVariable long resultId) {
+        return ai.postJson(
+                "/ai/experience/execution/{userId}/results/{resultId}/dismiss",
+                Map.of(), userId(), resultId
+        );
+    }
+
+    @PostMapping("/execution/results/{resultId}/restore")
+    Map<String, Object> restoreResult(@PathVariable long resultId) {
+        return ai.postJson(
+                "/ai/experience/execution/{userId}/results/{resultId}/restore",
+                Map.of(), userId(), resultId
+        );
     }
 
     @GetMapping("/execution/needs-attention")

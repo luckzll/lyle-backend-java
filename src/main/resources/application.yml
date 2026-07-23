@@ -56,6 +56,10 @@ ai:
     response-timeout-seconds: ${AI_SERVICE_RESPONSE_TIMEOUT_SECONDS:120}
 
 app:
+  v63:
+    auth-login-enabled: ${AUTH_LOGIN_V63_ENABLED:true}
+    workspace-drop-enabled: ${CHAT_WORKSPACE_DROP_ENABLED:true}
+    folder-attachments-enabled: ${CHAT_FOLDER_ATTACHMENTS_ENABLED:true}
   auth:
     jwt-secret: ${JWT_SECRET:lyle-dev-secret-key-please-change-to-at-least-32-bytes}
     jwt-ttl-minutes: ${JWT_TTL_MINUTES:10080}

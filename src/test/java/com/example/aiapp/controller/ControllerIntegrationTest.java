@@ -3,6 +3,7 @@ package com.example.aiapp.controller;
 import com.example.aiapp.config.AuthProperties;
 import com.example.aiapp.config.RateLimitProperties;
 import com.example.aiapp.config.SecurityConfig;
+import com.example.aiapp.config.V63FeatureProperties;
 import com.example.aiapp.domain.dto.AuthRequestDTO;
 import com.example.aiapp.domain.dto.ChatRequestDTO;
 import com.example.aiapp.domain.dto.UpdateConversationDTO;
@@ -89,15 +90,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         AdminController.class,
         AgentToolController.class,
         WorkbenchController.class,
-        ExperienceController.class
+        ExperienceController.class,
+        RuntimeConfigController.class
 })
 @Import({SecurityConfig.class, JwtService.class, JwtAuthenticationFilter.class, RateLimitFilter.class})
-@EnableConfigurationProperties({AuthProperties.class, RateLimitProperties.class})
+@EnableConfigurationProperties({AuthProperties.class, RateLimitProperties.class, V63FeatureProperties.class})
 @TestPropertySource(properties = {
         "app.auth.jwt-secret=test-secret-key-that-is-long-enough-for-hmac",
         "app.auth.jwt-ttl-minutes=60",
         "app.rate-limit.auth-per-minute=100",
-        "app.rate-limit.chat-per-minute=100"
+        "app.rate-limit.chat-per-minute=100",
+        "app.v63.auth-login-enabled=false",
+        "app.v63.workspace-drop-enabled=true",
+        "app.v63.folder-attachments-enabled=false"
 })
 class ControllerIntegrationTest {
 
@@ -174,6 +179,46 @@ class ControllerIntegrationTest {
                 .andExpect(jsonPath("$.user.id").value(7))
                 .andExpect(jsonPath("$.user.username").value("new-user"))
                 .andExpect(jsonPath("$.token").value("token"));
+    }
+
+    @Test
+    void v63RuntimeFlagsArePublicAndReadAtRuntime() throws Exception {
+        mockMvc.perform(get("/runtime-config"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.authLoginV63Enabled").value(false))
+                .andExpect(jsonPath("$.chatWorkspaceDropEnabled").value(true))
+                .andExpect(jsonPath("$.chatFolderAttachmentsEnabled").value(false));
+    }
+
+    @Test
+    void anonymousAuthFailureMetricIsPublicButOtherEventsAreRejected() throws Exception {
+        Map<String, Object> request = Map.of(
+                "eventType", "auth_submit_total",
+                "page", "login",
+                "actionType", "login",
+                "status", "failed",
+                "errorCategory", "http"
+        );
+        when(aiServiceClient.postJson(
+                "/ai/experience/events/{userId}", request, "anonymous-auth"
+        )).thenReturn(Map.of("accepted", true));
+
+        mockMvc.perform(post("/experience/public-events")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accepted").value(true));
+
+        verify(aiServiceClient).postJson(
+                "/ai/experience/events/{userId}", request, "anonymous-auth"
+        );
+
+        mockMvc.perform(post("/experience/public-events")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"eventType":"chat_folder_scan_total","page":"chat"}
+                                """))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -328,7 +373,7 @@ class ControllerIntegrationTest {
     @Test
     void experienceResultsProxyCursorAndAutomationFilter() throws Exception {
         when(aiServiceClient.getExperienceResults(
-                "42", "failed", 7L, 17L, "cursor-next", 20
+                "42", "failed", 7L, 17L, true, "cursor-next", 20
         )).thenReturn(Map.of(
                 "items", List.of(),
                 "nextCursor", "cursor-after",
@@ -339,6 +384,7 @@ class ControllerIntegrationTest {
                         .param("status", "failed")
                         .param("projectId", "7")
                         .param("automationId", "17")
+                        .param("attentionOnly", "true")
                         .param("cursor", "cursor-next")
                         .param("limit", "20")
                         .header("Authorization", bearer(42L, "lyle", "USER")))
@@ -347,14 +393,14 @@ class ControllerIntegrationTest {
                 .andExpect(jsonPath("$.hasMore").value(true));
 
         verify(aiServiceClient).getExperienceResults(
-                "42", "failed", 7L, 17L, "cursor-next", 20
+                "42", "failed", 7L, 17L, true, "cursor-next", 20
         );
     }
 
     @Test
     void experienceResultsKeepsLegacyNoFilterRequest() throws Exception {
         when(aiServiceClient.getExperienceResults(
-                "42", null, null, null, null, 50
+                "42", null, null, null, false, null, 50
         )).thenReturn(Map.of("items", List.of(), "hasMore", false));
 
         mockMvc.perform(get("/experience/execution/results")
@@ -364,7 +410,39 @@ class ControllerIntegrationTest {
                 .andExpect(jsonPath("$.hasMore").value(false));
 
         verify(aiServiceClient).getExperienceResults(
-                "42", null, null, null, null, 50
+                "42", null, null, null, false, null, 50
+        );
+    }
+
+    @Test
+    void experienceResultDismissUsesAuthenticatedUser() throws Exception {
+        when(aiServiceClient.postJson(
+                "/ai/experience/execution/{userId}/results/{resultId}/dismiss", Map.of(), "42", 17L
+        )).thenReturn(Map.of("id", 17, "status", "failed"));
+
+        mockMvc.perform(post("/experience/execution/results/17/dismiss")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(17));
+
+        verify(aiServiceClient).postJson(
+                "/ai/experience/execution/{userId}/results/{resultId}/dismiss", Map.of(), "42", 17L
+        );
+    }
+
+    @Test
+    void experienceResultRestoreUsesAuthenticatedUser() throws Exception {
+        when(aiServiceClient.postJson(
+                "/ai/experience/execution/{userId}/results/{resultId}/restore", Map.of(), "42", 17L
+        )).thenReturn(Map.of("id", 17, "status", "failed"));
+
+        mockMvc.perform(post("/experience/execution/results/17/restore")
+                        .header("Authorization", bearer(42L, "lyle", "USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(17));
+
+        verify(aiServiceClient).postJson(
+                "/ai/experience/execution/{userId}/results/{resultId}/restore", Map.of(), "42", 17L
         );
     }
 

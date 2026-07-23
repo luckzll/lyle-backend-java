@@ -50,6 +50,21 @@ class ChatAttachmentServiceTest {
     }
 
     @Test
+    void uploadPersistsFolderMetadataWithoutUsingItAsObjectKey() {
+        byte[] text = "scope".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var file = new MockMultipartFile("file", "范围.md", "text/markdown", text);
+        when(storage.upload(anyString(), anyString(), any(), anyLong(), anyString())).thenReturn(
+                new StoredObject("LOCAL", "chat-attachments", "42/server-id.md", "file:///tmp/server-id.md", "text/markdown", text.length, "private")
+        );
+
+        var result = service.upload(42L, file, "file", "folder_drop", "group-1", "需求资料", "需求资料/版本/范围.md");
+
+        assertThat(result.relativePath()).isEqualTo("需求资料/版本/范围.md");
+        assertThat(result.folderGroupId()).isEqualTo("group-1");
+        verify(storage).upload(anyString(), org.mockito.ArgumentMatchers.matches("42/[0-9a-f-]+\\.md"), any(), anyLong(), anyString());
+    }
+
+    @Test
     void uploadRejectsExecutableDisguisedAsFile() {
         var file = new MockMultipartFile("file", "payload.exe", "application/octet-stream", new byte[]{1, 2, 3});
 

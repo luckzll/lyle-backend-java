@@ -34,9 +34,13 @@ public class ChatAttachmentController {
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     ChatAttachmentVO upload(
             @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "kind", required = false) String kind
+            @RequestParam(value = "kind", required = false) String kind,
+            @RequestParam(value = "sourceType", required = false) String sourceType,
+            @RequestParam(value = "folderGroupId", required = false) String folderGroupId,
+            @RequestParam(value = "folderRoot", required = false) String folderRoot,
+            @RequestParam(value = "relativePath", required = false) String relativePath
     ) {
-        return service.upload(CurrentUserUtils.currentUserId(), file, kind);
+        return service.upload(CurrentUserUtils.currentUserId(), file, kind, sourceType, folderGroupId, folderRoot, relativePath);
     }
 
     @GetMapping("/{attachmentId}/content")

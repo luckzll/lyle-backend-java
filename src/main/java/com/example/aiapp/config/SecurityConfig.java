@@ -38,7 +38,7 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
-                        .requestMatchers("/health", "/auth/**", "/actuator/health", "/error").permitAll()
+                        .requestMatchers("/health", "/auth/**", "/runtime-config", "/experience/public-events", "/actuator/health", "/error").permitAll()
                         .requestMatchers("/admin/**", "/prompts/**", "/evaluation/**", "/ingest/tasks/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )

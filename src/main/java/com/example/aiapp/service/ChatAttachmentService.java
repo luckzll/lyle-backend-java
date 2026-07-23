@@ -19,6 +19,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.LocalDateTime;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -55,8 +56,22 @@ public class ChatAttachmentService {
 
     @Transactional
     public ChatAttachmentVO upload(Long userId, MultipartFile file, String requestedKind) {
+        return upload(userId, file, requestedKind, null, null, null, null);
+    }
+
+    @Transactional
+    public ChatAttachmentVO upload(
+            Long userId,
+            MultipartFile file,
+            String requestedKind,
+            String sourceType,
+            String folderGroupId,
+            String folderRoot,
+            String relativePath
+    ) {
         byte[] bytes = validateAndRead(file);
         String name = safeFileName(file.getOriginalFilename());
+        var folder = ChatAttachmentPathPolicy.normalize(sourceType, folderGroupId, folderRoot, relativePath, name);
         String contentType = normalizedContentType(file.getContentType(), name);
         String kind = IMAGE_TYPES.contains(contentType) ? "image" : "file";
         if (StringUtils.hasText(requestedKind) && !kind.equals(requestedKind)) {
@@ -85,6 +100,10 @@ public class ChatAttachmentService {
         entity.setStoragePath(stored.storagePath());
         entity.setBucket(stored.bucket());
         entity.setObjectKey(stored.objectKey());
+        entity.setSourceType(folder.sourceType());
+        entity.setFolderGroupId(folder.folderGroupId());
+        entity.setFolderRoot(folder.folderRoot());
+        entity.setRelativePath(folder.relativePath());
         if ("image".equals(kind)) {
             readDimensions(bytes, entity);
         }
@@ -304,7 +323,7 @@ public class ChatAttachmentService {
     }
 
     private String safeFileName(String raw) {
-        String value = raw == null ? "attachment" : raw.replace('\\', '/');
+        String value = raw == null ? "attachment" : Normalizer.normalize(raw, Normalizer.Form.NFC).replace('\\', '/');
         value = value.substring(value.lastIndexOf('/') + 1).replace("\r", "").replace("\n", "").trim();
         if (value.isBlank()) value = "attachment";
         return value.length() > 255 ? value.substring(value.length() - 255) : value;
@@ -326,13 +345,15 @@ public class ChatAttachmentService {
                 entity.getId(), entity.getKind(), entity.getOriginalName(), entity.getContentType(),
                 entity.getFileSize(), entity.getStatus(),
                 "image".equals(entity.getKind()) ? base + "?disposition=inline" : null,
-                base + "?disposition=attachment", entity.getWidth(), entity.getHeight()
+                base + "?disposition=attachment", entity.getWidth(), entity.getHeight(), entity.getPosition(),
+                entity.getSourceType(), entity.getFolderGroupId(), entity.getFolderRoot(), entity.getRelativePath()
         );
     }
 
     private AiChatAttachmentDTO toAiDTO(ChatAttachmentEntity entity) {
         return new AiChatAttachmentDTO(
                 entity.getId(), entity.getKind(), entity.getOriginalName(), entity.getContentType(), entity.getFileSize(),
+                entity.getSourceType(), entity.getFolderGroupId(), entity.getFolderRoot(), entity.getRelativePath(),
                 new AiChatAttachmentDTO.StorageObjectRefDTO(
                         entity.getStoragePath(), entity.getStorageProvider(), entity.getBucket(), entity.getObjectKey(),
                         entity.getOriginalName(), entity.getContentType(), entity.getFileSize()

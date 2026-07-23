@@ -39,7 +39,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     private int limitFor(String path) {
-        if (path.endsWith("/auth/login")) {
+        if (path.endsWith("/auth/login") || path.endsWith("/experience/public-events")) {
             return properties.authPerMinute();
         }
         if (path.endsWith("/chat/send") || path.endsWith("/chat/stream")) {

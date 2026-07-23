@@ -252,6 +252,11 @@ public class ChatServiceImpl implements ChatService {
                                 upstreamPhase,
                                 event -> applyStreamEvent(activeTurn, event)
                         );
+                        // Forward the current upstream bytes before publishing a
+                        // derived lifecycle frame. Otherwise a DataBuffer boundary
+                        // inside JSON can cause the lifecycle frame to be injected
+                        // into the middle of that SSE event.
+                        chunkConsumer.accept(chunk);
                         String phase = upstreamPhase.get();
                         if (receivedDelta
                                 && responding.compareAndSet(false, true)
@@ -262,7 +267,6 @@ public class ChatServiceImpl implements ChatService {
                                     "message", "正在回复…"
                             )));
                         }
-                        chunkConsumer.accept(chunk);
                     })
                     .blockLast();
             if (activeTurn.cancelled().get()) {
