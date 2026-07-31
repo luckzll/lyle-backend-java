@@ -46,6 +46,15 @@ src/main/resources/mapper/
 - GET /api/knowledge-bases/{knowledgeBaseId}/files
 - GET /api/ingest/tasks/{taskId}
 - POST /api/chat/send
+- POST /api/auth/refresh
+- POST /api/auth/logout
+- POST /api/auth/logout-all
+- POST /api/auth/change-password
+- GET /api/auth/session
+- GET /api/usage/summary
+- GET /api/usage/by-task
+- GET /api/usage/trend
+- GET /api/usage/turns
 
 ## 执行体验 API
 

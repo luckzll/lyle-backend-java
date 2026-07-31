@@ -13,7 +13,7 @@
 
   <groupId>com.example</groupId>
   <artifactId>aiapp</artifactId>
-  <version>6.3.0</version>
+  <version>6.4.0</version>
   <name>ai-app-backend</name>
 
   <properties>

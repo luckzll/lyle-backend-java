@@ -1,0 +1,63 @@
+CREATE TABLE ai_usage_event (
+  event_id VARCHAR(64) NOT NULL PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  conversation_id VARCHAR(128) NULL,
+  turn_id VARCHAR(128) NULL,
+  trace_id VARCHAR(128) NOT NULL,
+  reservation_id VARCHAR(64) NULL,
+  call_type VARCHAR(32) NOT NULL,
+  task_type VARCHAR(64) NOT NULL,
+  provider VARCHAR(64) NOT NULL,
+  model VARCHAR(128) NOT NULL,
+  route_version VARCHAR(64) NULL,
+  input_tokens BIGINT NOT NULL,
+  output_tokens BIGINT NOT NULL,
+  cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+  cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+  usage_source VARCHAR(32) NOT NULL,
+  estimated_cost_micros BIGINT NOT NULL DEFAULT 0,
+  pricing_version VARCHAR(64) NOT NULL,
+  currency VARCHAR(8) NOT NULL DEFAULT 'CNY',
+  latency_millis BIGINT NOT NULL DEFAULT 0,
+  status VARCHAR(32) NOT NULL,
+  error_category VARCHAR(64) NULL,
+  occurred_at DATETIME(6) NOT NULL,
+  received_at DATETIME(6) NOT NULL,
+  KEY idx_ai_usage_user_time (user_id, occurred_at),
+  KEY idx_ai_usage_user_turn (user_id, turn_id),
+  KEY idx_ai_usage_provider_model_time (provider, model, occurred_at),
+  KEY idx_ai_usage_task_time (task_type, occurred_at),
+  KEY idx_ai_usage_reservation (reservation_id)
+);
+
+CREATE TABLE ai_usage_policy (
+  user_id BIGINT NOT NULL PRIMARY KEY,
+  daily_soft_token_limit BIGINT NOT NULL DEFAULT 200000,
+  daily_hard_token_limit BIGINT NOT NULL DEFAULT 250000,
+  daily_soft_cost_micros BIGINT NOT NULL DEFAULT 800000,
+  daily_hard_cost_micros BIGINT NOT NULL DEFAULT 1000000,
+  turn_max_calls INT NOT NULL DEFAULT 12,
+  turn_max_input_tokens BIGINT NOT NULL DEFAULT 100000,
+  turn_max_output_tokens BIGINT NOT NULL DEFAULT 16000,
+  turn_max_cost_micros BIGINT NOT NULL DEFAULT 200000,
+  updated_at DATETIME(6) NOT NULL
+);
+
+CREATE TABLE ai_usage_reservation (
+  reservation_id VARCHAR(64) NOT NULL PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  conversation_id VARCHAR(128) NULL,
+  turn_id VARCHAR(128) NULL,
+  trace_id VARCHAR(128) NOT NULL,
+  reserved_tokens BIGINT NOT NULL,
+  reserved_cost_micros BIGINT NOT NULL,
+  reserved_calls INT NOT NULL,
+  settled_tokens BIGINT NOT NULL DEFAULT 0,
+  settled_cost_micros BIGINT NOT NULL DEFAULT 0,
+  settled_calls INT NOT NULL DEFAULT 0,
+  status VARCHAR(32) NOT NULL,
+  created_at DATETIME(6) NOT NULL,
+  expires_at DATETIME(6) NOT NULL,
+  released_at DATETIME(6) NULL,
+  KEY idx_ai_usage_reservation_user_active (user_id, status, expires_at)
+);

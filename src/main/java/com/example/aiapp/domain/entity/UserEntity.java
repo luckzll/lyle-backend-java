@@ -17,11 +17,25 @@ public class UserEntity {
 
     private String role;
 
+    private String status;
+
+    @TableField("auth_version")
+    private Integer authVersion;
+
     @TableField("password_hash")
     private String passwordHash;
 
+    @TableField("password_changed_at")
+    private LocalDateTime passwordChangedAt;
+
+    @TableField("last_login_at")
+    private LocalDateTime lastLoginAt;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
+
+    @TableField("updated_at")
+    private LocalDateTime updatedAt;
 
     public Long getId() {
         return id;
@@ -47,6 +61,22 @@ public class UserEntity {
         this.role = role;
     }
 
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public Integer getAuthVersion() {
+        return authVersion;
+    }
+
+    public void setAuthVersion(Integer authVersion) {
+        this.authVersion = authVersion;
+    }
+
     public String getPasswordHash() {
         return passwordHash;
     }
@@ -55,11 +85,35 @@ public class UserEntity {
         this.passwordHash = passwordHash;
     }
 
+    public LocalDateTime getPasswordChangedAt() {
+        return passwordChangedAt;
+    }
+
+    public void setPasswordChangedAt(LocalDateTime passwordChangedAt) {
+        this.passwordChangedAt = passwordChangedAt;
+    }
+
+    public LocalDateTime getLastLoginAt() {
+        return lastLoginAt;
+    }
+
+    public void setLastLoginAt(LocalDateTime lastLoginAt) {
+        this.lastLoginAt = lastLoginAt;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
     }
 }

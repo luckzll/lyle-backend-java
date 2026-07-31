@@ -2,11 +2,13 @@ package com.example.aiapp.controller;
 
 import com.example.aiapp.config.AuthProperties;
 import com.example.aiapp.config.RateLimitProperties;
+import com.example.aiapp.config.RedisProperties;
 import com.example.aiapp.config.SecurityConfig;
 import com.example.aiapp.config.V63FeatureProperties;
 import com.example.aiapp.domain.dto.AuthRequestDTO;
 import com.example.aiapp.domain.dto.ChatRequestDTO;
 import com.example.aiapp.domain.dto.UpdateConversationDTO;
+import com.example.aiapp.domain.entity.UserEntity;
 import com.example.aiapp.domain.vo.AdminOverviewVO;
 import com.example.aiapp.domain.vo.AuthResponseVO;
 import com.example.aiapp.domain.vo.ChatMessageVO;
@@ -28,6 +30,8 @@ import com.example.aiapp.mapper.UserMapper;
 import com.example.aiapp.security.JwtAuthenticationFilter;
 import com.example.aiapp.security.JwtService;
 import com.example.aiapp.security.RateLimitFilter;
+import com.example.aiapp.security.AuthSessionService;
+import com.example.aiapp.security.AuthSecurityEventService;
 import com.example.aiapp.service.AdminService;
 import com.example.aiapp.service.AuthService;
 import com.example.aiapp.service.ChatService;
@@ -36,12 +40,15 @@ import com.example.aiapp.service.FileService;
 import com.example.aiapp.service.KnowledgeBaseService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -58,6 +65,8 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
@@ -94,12 +103,29 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         RuntimeConfigController.class
 })
 @Import({SecurityConfig.class, JwtService.class, JwtAuthenticationFilter.class, RateLimitFilter.class})
-@EnableConfigurationProperties({AuthProperties.class, RateLimitProperties.class, V63FeatureProperties.class})
+@EnableConfigurationProperties({
+        AuthProperties.class,
+        RateLimitProperties.class,
+        RedisProperties.class,
+        V63FeatureProperties.class
+})
 @TestPropertySource(properties = {
         "app.auth.jwt-secret=test-secret-key-that-is-long-enough-for-hmac",
+        "app.auth.jwt-key-id=test-current",
+        "app.auth.jwt-previous-secret=",
+        "app.auth.jwt-previous-key-id=",
+        "app.auth.accept-legacy-jwt=false",
         "app.auth.jwt-ttl-minutes=60",
+        "app.auth.refresh-ttl-days=30",
+        "app.auth.issuer=lyle-ai",
+        "app.auth.audience=lyle-web",
+        "app.auth.refresh-cookie-name=lyle_refresh",
+        "app.auth.secure-cookie=false",
+        "app.auth.session-v64-enabled=false",
+        "app.auth.allowed-origins=http://127.0.0.1:4173",
         "app.rate-limit.auth-per-minute=100",
         "app.rate-limit.chat-per-minute=100",
+        "app.redis.enabled=false",
         "app.v63.auth-login-enabled=false",
         "app.v63.workspace-drop-enabled=true",
         "app.v63.folder-attachments-enabled=false"
@@ -117,6 +143,12 @@ class ControllerIntegrationTest {
 
     @MockBean
     AuthService authService;
+
+    @MockBean
+    AuthSessionService authSessionService;
+
+    @MockBean
+    AuthSecurityEventService authSecurityEventService;
 
     @MockBean
     ConversationService conversationService;
@@ -163,22 +195,90 @@ class ControllerIntegrationTest {
     @MockBean
     UserMapper userMapper;
 
+    @BeforeEach
+    void allowGeneratedTestSessions() {
+        when(authSessionService.isAccessValid(anyLong(), anyLong(), anyInt())).thenReturn(true);
+    }
+
     @Test
     void authEndpointsArePublic() throws Exception {
-        when(authService.register(any(AuthRequestDTO.class))).thenReturn(new AuthResponseVO(
-                new UserVO(7L, "new-user", "USER"),
-                "token"
-        ));
+        when(authService.register(any(AuthRequestDTO.class), any(), any())).thenReturn(
+                new AuthService.AuthenticatedSession(
+                        new AuthResponseVO(new UserVO(7L, "new-user", "USER"), "token"),
+                        "refresh-token"
+                )
+        );
+
+        mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"new-user","password":"12345678"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user.id").value(7))
+                .andExpect(jsonPath("$.user.username").value("new-user"))
+                .andExpect(jsonPath("$.accessToken").value("token"));
+    }
+
+    @Test
+    void loginAcceptsLegacySixCharacterPasswordsButRegistrationStillRequiresEight() throws Exception {
+        when(authService.login(any(AuthRequestDTO.class), any(), any())).thenReturn(
+                new AuthService.AuthenticatedSession(
+                        new AuthResponseVO(new UserVO(8L, "legacy-user", "USER"), "legacy-token"),
+                        "legacy-refresh-token"
+                )
+        );
+
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"legacy-user","password":"123456"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").value("legacy-token"));
 
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"username":"new-user","password":"123456"}
                                 """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.user.id").value(7))
-                .andExpect(jsonPath("$.user.username").value("new-user"))
-                .andExpect(jsonPath("$.token").value("token"));
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void authenticatedAuthEndpointsAreNotPublic() throws Exception {
+        mockMvc.perform(post("/auth/logout"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/auth/logout-all"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/auth/change-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"currentPassword":"old-password","newPassword":"new-password"}
+                                """))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/auth/session"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void refreshRequiresAllowedOriginAndMatchingHost() throws Exception {
+        mockMvc.perform(post("/auth/refresh")
+                        .header(HttpHeaders.HOST, "127.0.0.1:4173"))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/auth/refresh")
+                        .header(HttpHeaders.HOST, "127.0.0.1:4173")
+                        .header(HttpHeaders.ORIGIN, "https://attacker.example"))
+                .andExpect(status().isForbidden());
+
+        when(authService.refresh(any())).thenThrow(
+                new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED)
+        );
+        mockMvc.perform(post("/auth/refresh")
+                        .header(HttpHeaders.HOST, "127.0.0.1:4173")
+                        .header(HttpHeaders.ORIGIN, "http://127.0.0.1:4173"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -464,6 +564,13 @@ class ControllerIntegrationTest {
 
     @Test
     void currentUserComesFromJwt() throws Exception {
+        UserEntity user = new UserEntity();
+        user.setId(42L);
+        user.setUsername("lyle");
+        user.setRole("USER");
+        user.setStatus("ACTIVE");
+        when(userMapper.selectAccountById(42L)).thenReturn(user);
+
         mockMvc.perform(get("/users/me")
                         .header("Authorization", bearer(42L, "lyle", "USER")))
                 .andExpect(status().isOk())

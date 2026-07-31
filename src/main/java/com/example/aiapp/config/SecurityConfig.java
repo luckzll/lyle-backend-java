@@ -2,9 +2,11 @@ package com.example.aiapp.config;
 
 import com.example.aiapp.security.JwtAuthenticationFilter;
 import com.example.aiapp.security.RateLimitFilter;
+import com.example.aiapp.security.RefreshOriginFilter;
 import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -23,7 +25,8 @@ public class SecurityConfig {
     SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             JwtAuthenticationFilter jwtAuthenticationFilter,
-            RateLimitFilter rateLimitFilter
+            RateLimitFilter rateLimitFilter,
+            RefreshOriginFilter refreshOriginFilter
     ) throws Exception {
         return http
                 .csrf(csrf -> csrf.disable())
@@ -38,13 +41,32 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
-                        .requestMatchers("/health", "/auth/**", "/runtime-config", "/experience/public-events", "/actuator/health", "/error").permitAll()
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/auth/register",
+                                "/auth/login",
+                                "/auth/refresh"
+                        ).permitAll()
+                        .requestMatchers(
+                                "/health",
+                                "/internal/ai-usage/events:batch",
+                                "/runtime-config",
+                                "/experience/public-events",
+                                "/actuator/health",
+                                "/error"
+                        ).permitAll()
                         .requestMatchers("/admin/**", "/prompts/**", "/evaluation/**", "/ingest/tasks/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(refreshOriginFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();
+    }
+
+    @Bean
+    RefreshOriginFilter refreshOriginFilter(AuthProperties properties) {
+        return new RefreshOriginFilter(properties);
     }
 
     @Bean

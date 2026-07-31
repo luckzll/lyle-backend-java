@@ -18,9 +18,11 @@ import java.util.List;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
+    private final AuthSessionService authSessionService;
 
-    public JwtAuthenticationFilter(JwtService jwtService) {
+    public JwtAuthenticationFilter(JwtService jwtService, AuthSessionService authSessionService) {
         this.jwtService = jwtService;
+        this.authSessionService = authSessionService;
     }
 
     @Override
@@ -37,10 +39,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 Long userId = Long.parseLong(claims.getSubject());
                 String username = claims.get("username", String.class);
                 String role = claims.get("role", String.class);
+                Long sessionId = Long.parseLong(claims.get("sid", String.class));
+                Integer authVersion = claims.get("ver", Integer.class);
                 if (role == null || role.isBlank()) {
                     role = "USER";
                 }
-                CurrentUser principal = new CurrentUser(userId, username, role);
+                if (authVersion == null || !authSessionService.isAccessValid(sessionId, userId, authVersion)) {
+                    throw new IllegalArgumentException("Session is no longer active");
+                }
+                CurrentUser principal = new CurrentUser(userId, username, role, sessionId, authVersion);
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                         principal,
                         null,

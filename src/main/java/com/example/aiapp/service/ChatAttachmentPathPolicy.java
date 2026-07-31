@@ -14,8 +14,7 @@ public final class ChatAttachmentPathPolicy {
     private static final int MAX_PATH_LENGTH = 512;
     private static final int MAX_SEGMENT_LENGTH = 128;
     private static final Pattern CONTROL = Pattern.compile("[\\x00-\\x1f\\x7f]");
-    private static final Pattern DRIVE = Pattern.compile("^[a-zA-Z]:.*");
-    private static final Pattern URI_SCHEME = Pattern.compile("^[a-zA-Z][a-zA-Z0-9+.-]*://.*");
+    private static final Pattern URI_SCHEME = Pattern.compile("^[a-zA-Z][a-zA-Z0-9+.-]*:.*");
     private static final Pattern GROUP_ID = Pattern.compile("^[a-zA-Z0-9._-]{1,64}$");
     private static final Set<String> SOURCES = Set.of("picker", "drop", "paste", "folder_picker", "folder_drop");
 
@@ -54,8 +53,8 @@ public final class ChatAttachmentPathPolicy {
     static String normalizePath(String raw) {
         if (!StringUtils.hasText(raw)) reject();
         String value = Normalizer.normalize(raw, Normalizer.Form.NFC).replace('\\', '/');
-        if (value.length() > MAX_PATH_LENGTH || value.startsWith("/") || value.startsWith("//")
-                || DRIVE.matcher(value).matches() || URI_SCHEME.matcher(value).matches() || CONTROL.matcher(value).find()) {
+        if (!value.equals(value.strip()) || value.length() > MAX_PATH_LENGTH || value.startsWith("/") || value.startsWith("//")
+                || URI_SCHEME.matcher(value).matches() || CONTROL.matcher(value).find()) {
             reject();
         }
         String[] segments = value.split("/", -1);

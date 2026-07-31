@@ -25,6 +25,10 @@ class ChatAttachmentPathPolicyTest {
                 "/tmp/密码.txt",
                 "C:/tmp/密码.txt",
                 "file://tmp/密码.txt",
+                "file:/tmp/密码.txt",
+                "file:tmp/密码.txt",
+                "jar:file:/tmp/密码.txt",
+                " file:/tmp/密码.txt",
                 "需求资料//密码.txt",
                 "需求资料/坏\n名字.txt"
         }) {

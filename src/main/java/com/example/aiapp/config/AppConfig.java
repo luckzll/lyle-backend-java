@@ -5,6 +5,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.util.StringUtils;
@@ -14,6 +16,8 @@ import org.slf4j.LoggerFactory;
 import reactor.netty.http.client.HttpClient;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Locale;
 import java.util.concurrent.Executor;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -29,7 +33,8 @@ import java.util.concurrent.atomic.AtomicInteger;
         QdrantProperties.class,
         RateLimitProperties.class,
         TosProperties.class,
-        V63FeatureProperties.class
+        V63FeatureProperties.class,
+        UsageProperties.class
 })
 public class AppConfig {
 
@@ -96,5 +101,74 @@ public class AppConfig {
                 StringUtils.hasText(properties.accessKeyId()),
                 StringUtils.hasText(properties.secretAccessKey())
         );
+    }
+
+    @Bean
+    ApplicationRunner productionSecurityValidator(
+            Environment environment,
+            AuthProperties authProperties,
+            UsageProperties usageProperties,
+            AiServiceProperties aiServiceProperties
+    ) {
+        return args -> {
+            if (environment.acceptsProfiles(Profiles.of("prod", "production"))) {
+                validateProductionSecurity(authProperties, usageProperties, aiServiceProperties);
+            }
+        };
+    }
+
+    void validateProductionSecurity(
+            AuthProperties authProperties,
+            UsageProperties usageProperties,
+            AiServiceProperties aiServiceProperties
+    ) {
+        if (weakSecret(authProperties.jwtSecret())) {
+            throw new IllegalStateException("Production JWT_SECRET must be a strong random secret.");
+        }
+        if (!StringUtils.hasText(authProperties.jwtKeyId())) {
+            throw new IllegalStateException("Production JWT_KEY_ID must be configured.");
+        }
+        if (!authProperties.secureCookie()) {
+            throw new IllegalStateException("REFRESH_COOKIE_SECURE must be true in production.");
+        }
+        if (authProperties.acceptLegacyJwt()) {
+            throw new IllegalStateException("AUTH_ACCEPT_LEGACY_JWT must be false in production.");
+        }
+        if (weakSecret(usageProperties.internalToken())) {
+            throw new IllegalStateException("AI_USAGE_INTERNAL_TOKEN must be a strong random token.");
+        }
+        if (weakSecret(aiServiceProperties.internalToken())) {
+            throw new IllegalStateException("AI_SERVICE_INTERNAL_TOKEN must be a strong random token.");
+        }
+        if (!StringUtils.hasText(authProperties.allowedOrigins())
+                || authProperties.allowedOrigins().contains("*")
+                || authProperties.allowedOrigins().contains("localhost")
+                || authProperties.allowedOrigins().contains("127.0.0.1")
+                || Arrays.stream(authProperties.allowedOrigins().split(","))
+                .map(String::trim)
+                .anyMatch(origin -> !origin.startsWith("https://"))) {
+            throw new IllegalStateException(
+                    "AUTH_ALLOWED_ORIGINS must contain explicit HTTPS production origins."
+            );
+        }
+        boolean previousSecretConfigured = StringUtils.hasText(authProperties.jwtPreviousSecret());
+        boolean previousKeyIdConfigured = StringUtils.hasText(authProperties.jwtPreviousKeyId());
+        if (previousSecretConfigured != previousKeyIdConfigured) {
+            throw new IllegalStateException(
+                    "JWT_PREVIOUS_SECRET and JWT_PREVIOUS_KEY_ID must be configured together."
+            );
+        }
+    }
+
+    private static boolean weakSecret(String value) {
+        if (!StringUtils.hasText(value) || value.length() < 32) {
+            return true;
+        }
+        String normalized = value.toLowerCase(Locale.ROOT);
+        return normalized.contains("change-me")
+                || normalized.contains("change-this")
+                || normalized.contains("default")
+                || normalized.contains("example")
+                || normalized.contains("lyle-dev");
     }
 }

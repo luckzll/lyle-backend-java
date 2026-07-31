@@ -721,6 +721,7 @@ public class AiServiceClient {
                         .queryParam("limit", limit)
                         .build(userId))
                 .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
                 })
                 .block();
@@ -731,6 +732,7 @@ public class AiServiceClient {
                 .uri("/ai/tools/todos/{userId}", userId)
                 .bodyValue(request)
                 .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
                 })
                 .block();
@@ -741,6 +743,7 @@ public class AiServiceClient {
                 .uri("/ai/tools/todos/{userId}/{todoId}/status", userId, todoId)
                 .bodyValue(request)
                 .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
                 })
                 .block();
@@ -751,6 +754,7 @@ public class AiServiceClient {
                 .uri("/ai/tools/todos/{userId}/{todoId}/due-at", userId, todoId)
                 .bodyValue(request)
                 .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
                 })
                 .block();
@@ -760,6 +764,7 @@ public class AiServiceClient {
         aiServiceWebClient.delete()
                 .uri("/ai/tools/todos/{userId}/{todoId}", userId, todoId)
                 .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
                 .bodyToMono(Void.class)
                 .block();
     }

@@ -15,6 +15,7 @@ import com.example.aiapp.service.AiConfigService;
 import com.example.aiapp.service.ChatAttachmentService;
 import com.example.aiapp.service.ChatService;
 import com.example.aiapp.utils.StringUtils;
+import com.example.aiapp.usage.UsageService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
@@ -56,6 +57,7 @@ public class ChatServiceImpl implements ChatService {
     private final ConversationMapper conversationMapper;
     private final ObjectMapper objectMapper;
     private ChatAttachmentService chatAttachmentService;
+    private UsageService usageService;
     private final ConcurrentMap<String, ActiveTurn> activeTurns = new ConcurrentHashMap<>();
 
     public ChatServiceImpl(
@@ -77,14 +79,22 @@ public class ChatServiceImpl implements ChatService {
         this.chatAttachmentService = chatAttachmentService;
     }
 
+    @Autowired
+    void setUsageService(UsageService usageService) {
+        this.usageService = usageService;
+    }
+
     @Override
     public ChatResponseVO send(Long userId, ChatRequestDTO request) {
         String conversationId = StringUtils.isBlank(request.conversationId())
                 ? UUID.randomUUID().toString()
                 : request.conversationId();
+        String turnId = StringUtils.isBlank(request.turnId())
+                ? UUID.randomUUID().toString()
+                : request.turnId();
         ensureConversationOwnedByUserIfPersisted(userId, conversationId);
         if (!StringUtils.isBlank(request.turnId())) {
-            ChatMessageEntity existing = chatMessageMapper.selectByConversationIdAndTurnId(conversationId, request.turnId());
+            ChatMessageEntity existing = chatMessageMapper.selectByConversationIdAndTurnId(conversationId, turnId);
             if (existing != null) {
                 return existingResponse(conversationId, existing);
             }
@@ -96,23 +106,36 @@ public class ChatServiceImpl implements ChatService {
                 : chatAttachmentService.requireReady(userId, request.attachmentIds());
 
         String aiMessage = withRecentImageContextUnlessCurrentImage(conversationId, userMessage, attachments);
+        UsageService.Reservation reservation = usageService == null
+                ? null
+                : usageService.reserve(userId, conversationId, turnId);
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
-                request.turnId(),
+                turnId,
                 request.projectId(),
                 aiMessage,
                 request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds(),
                 false,
                 aiConfigService.currentConfigMap(),
-                attachments
+                attachments,
+                reservation == null ? null : reservation.traceId(),
+                reservation == null ? null : reservation.reservationId(),
+                usageBudget(reservation)
         );
 
-        ChatMessageEntity userEntity = saveMessage(conversationId, request.turnId(), "user", historyContent(userMessage), Map.of());
+        ChatMessageEntity userEntity = saveMessage(conversationId, turnId, "user", historyContent(userMessage), Map.of());
         if (chatAttachmentService != null) {
             chatAttachmentService.bind(userId, conversationId, userEntity.getId(), request.attachmentIds());
         }
-        AiChatResponseDTO aiResponse = aiServiceClient.chat(aiRequest);
+        AiChatResponseDTO aiResponse;
+        try {
+            aiResponse = aiServiceClient.chat(aiRequest);
+        } finally {
+            if (usageService != null && reservation != null) {
+                usageService.releaseReservation(reservation.reservationId());
+            }
+        }
         saveMessage(conversationId, "assistant", aiResponse.answer());
         return new ChatResponseVO(
                 conversationId,
@@ -128,7 +151,8 @@ public class ChatServiceImpl implements ChatService {
                 aiResponse.candidatePlans() == null ? List.of() : aiResponse.candidatePlans(),
                 aiResponse.executionSuggestions() == null ? List.of() : aiResponse.executionSuggestions(),
                 aiResponse.projectContext() == null ? java.util.Map.of() : aiResponse.projectContext(),
-                aiResponse.review() == null ? java.util.Map.of() : aiResponse.review()
+                aiResponse.review() == null ? java.util.Map.of() : aiResponse.review(),
+                aiResponse.usage() == null ? new com.example.aiapp.domain.dto.UsageDTO(0, 0) : aiResponse.usage()
         );
     }
 
@@ -184,6 +208,9 @@ public class ChatServiceImpl implements ChatService {
                     : chatAttachmentService.requireReady(userId, request.attachmentIds());
 
         String aiMessage = withRecentImageContextUnlessCurrentImage(conversationId, userMessage, attachments);
+        UsageService.Reservation reservation = usageService == null
+                ? null
+                : usageService.reserve(userId, conversationId, turnId);
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
@@ -193,7 +220,10 @@ public class ChatServiceImpl implements ChatService {
                 request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds(),
                 true,
                 aiConfigService.currentConfigMap(),
-                attachments
+                attachments,
+                reservation == null ? null : reservation.traceId(),
+                reservation == null ? null : reservation.reservationId(),
+                usageBudget(reservation)
         );
 
         if (!retrying) {
@@ -309,7 +339,22 @@ public class ChatServiceImpl implements ChatService {
             throw exception;
         } finally {
             activeTurns.remove(turnId, activeTurn);
+            if (usageService != null && reservation != null) {
+                usageService.releaseReservation(reservation.reservationId());
+            }
         }
+    }
+
+    private Map<String, Long> usageBudget(UsageService.Reservation reservation) {
+        if (reservation == null) {
+            return Map.of();
+        }
+        return Map.of(
+                "maxCalls", reservation.maxCalls(),
+                "maxInputTokens", reservation.maxInputTokens(),
+                "maxOutputTokens", reservation.maxOutputTokens(),
+                "maxCostMicros", reservation.maxCostMicros()
+        );
     }
 
     private String sse(String event, Map<String, Object> data) {
@@ -413,6 +458,12 @@ public class ChatServiceImpl implements ChatService {
                 case "image.batch.completed" -> {
                     applyImageBatchCompleted(metadata, data);
                     changed = true;
+                }
+                case "meta" -> {
+                    if (data.get("usage") instanceof Map<?, ?> usage) {
+                        metadata.put("usage", new LinkedHashMap<>(usage));
+                        changed = true;
+                    }
                 }
                 case "error" -> {
                     metadata.put("phase", "FAILED");
