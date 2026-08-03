@@ -50,6 +50,7 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/health",
                                 "/internal/ai-usage/events:batch",
+                                "/billing/webhooks/**",
                                 "/runtime-config",
                                 "/experience/public-events",
                                 "/actuator/health",

@@ -1,10 +1,14 @@
 package com.example.aiapp.usage;
 
+import com.example.aiapp.billing.BillingService;
 import com.example.aiapp.config.UsageProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDate;
@@ -48,10 +52,21 @@ public class UsageService {
 
     private final JdbcTemplate jdbcTemplate;
     private final UsageProperties properties;
+    private final BillingService billingService;
 
     public UsageService(JdbcTemplate jdbcTemplate, UsageProperties properties) {
+        this(jdbcTemplate, properties, null);
+    }
+
+    @Autowired
+    public UsageService(
+            JdbcTemplate jdbcTemplate,
+            UsageProperties properties,
+            BillingService billingService
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.properties = properties;
+        this.billingService = billingService;
     }
 
     @Transactional
@@ -117,6 +132,9 @@ public class UsageService {
                 }
                 accepted.add(event.eventId());
                 settleReservation(event);
+                if (billingService != null) {
+                    settleCommercialAfterUsageCommit(event);
+                }
             } catch (NumberFormatException exception) {
                 rejected.add(new UsageBatchResponse.RejectedEvent(eventIdOf(event), "INVALID_USER_ID"));
             } catch (IllegalArgumentException exception) {
@@ -432,6 +450,25 @@ public class UsageService {
                 event.reservationId(),
                 Long.parseLong(event.userId())
         );
+    }
+
+    private void settleCommercialAfterUsageCommit(UsageEventRequest event) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            billingService.settleUsage(event);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    billingService.settleUsage(event);
+                } catch (RuntimeException ignored) {
+                    // The immutable AI usage event has already committed. Commercial
+                    // settlement is independently retryable by usageEventId and must
+                    // never erase or reject the metering evidence.
+                }
+            }
+        });
     }
 
     private void ensurePolicy(Long userId) {

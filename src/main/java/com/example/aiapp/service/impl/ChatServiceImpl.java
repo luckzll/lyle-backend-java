@@ -1,5 +1,6 @@
 package com.example.aiapp.service.impl;
 
+import com.example.aiapp.billing.BillingService;
 import com.example.aiapp.domain.dto.AiChatRequestDTO;
 import com.example.aiapp.domain.dto.AiChatResponseDTO;
 import com.example.aiapp.domain.dto.AiChatAttachmentDTO;
@@ -58,6 +59,7 @@ public class ChatServiceImpl implements ChatService {
     private final ObjectMapper objectMapper;
     private ChatAttachmentService chatAttachmentService;
     private UsageService usageService;
+    private BillingService billingService;
     private final ConcurrentMap<String, ActiveTurn> activeTurns = new ConcurrentHashMap<>();
 
     public ChatServiceImpl(
@@ -82,6 +84,11 @@ public class ChatServiceImpl implements ChatService {
     @Autowired
     void setUsageService(UsageService usageService) {
         this.usageService = usageService;
+    }
+
+    @Autowired
+    void setBillingService(BillingService billingService) {
+        this.billingService = billingService;
     }
 
     @Override
@@ -109,6 +116,17 @@ public class ChatServiceImpl implements ChatService {
         UsageService.Reservation reservation = usageService == null
                 ? null
                 : usageService.reserve(userId, conversationId, turnId);
+        String commercialReservation;
+        try {
+            commercialReservation = billingService == null
+                    ? null
+                    : billingService.reserveCommercial(userId, turnId);
+        } catch (RuntimeException exception) {
+            if (usageService != null && reservation != null) {
+                usageService.releaseReservation(reservation.reservationId());
+            }
+            throw exception;
+        }
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
@@ -134,6 +152,9 @@ public class ChatServiceImpl implements ChatService {
         } finally {
             if (usageService != null && reservation != null) {
                 usageService.releaseReservation(reservation.reservationId());
+            }
+            if (billingService != null) {
+                billingService.releaseCommercialReservation(commercialReservation);
             }
         }
         saveMessage(conversationId, "assistant", aiResponse.answer());
@@ -211,6 +232,17 @@ public class ChatServiceImpl implements ChatService {
         UsageService.Reservation reservation = usageService == null
                 ? null
                 : usageService.reserve(userId, conversationId, turnId);
+        String commercialReservation;
+        try {
+            commercialReservation = billingService == null
+                    ? null
+                    : billingService.reserveCommercial(userId, turnId);
+        } catch (RuntimeException exception) {
+            if (usageService != null && reservation != null) {
+                usageService.releaseReservation(reservation.reservationId());
+            }
+            throw exception;
+        }
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
@@ -341,6 +373,9 @@ public class ChatServiceImpl implements ChatService {
             activeTurns.remove(turnId, activeTurn);
             if (usageService != null && reservation != null) {
                 usageService.releaseReservation(reservation.reservationId());
+            }
+            if (billingService != null) {
+                billingService.releaseCommercialReservation(commercialReservation);
             }
         }
     }

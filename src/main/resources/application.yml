@@ -80,6 +80,29 @@ app:
     user-view-enabled: ${AI_USAGE_USER_VIEW_ENABLED:true}
     internal-token: ${AI_USAGE_INTERNAL_TOKEN:lyle-dev-usage-token-change-me}
     reservation-ttl-minutes: ${AI_USAGE_RESERVATION_TTL_MINUTES:10}
+  billing:
+    catalog-enabled: ${BILLING_CATALOG_ENABLED:true}
+    ledger-enabled: ${COMMERCIAL_LEDGER_ENABLED:true}
+    settlement-shadow-enabled: ${COMMERCIAL_SETTLEMENT_SHADOW_ENABLED:true}
+    quota-enforcement-enabled: ${COMMERCIAL_QUOTA_ENFORCEMENT_ENABLED:false}
+    checkout-enabled: ${PAYMENT_CHECKOUT_ENABLED:false}
+    webhook-enabled: ${PAYMENT_WEBHOOK_ENABLED:true}
+    fulfillment-worker-enabled: ${PAYMENT_FULFILLMENT_WORKER_ENABLED:true}
+    reconciliation-enabled: ${PAYMENT_RECONCILIATION_ENABLED:true}
+    user-view-enabled: ${BILLING_USER_VIEW_ENABLED:true}
+    market: ${BILLING_MARKET:CN}
+    currency: ${BILLING_CURRENCY:CNY}
+    payment-provider: ${PAYMENT_PROVIDER:MOCK}
+    merchant-id: ${PAYMENT_MERCHANT_ID:lyle-local-sandbox}
+    webhook-secret: ${PAYMENT_WEBHOOK_SECRET:}
+    callback-url: ${PAYMENT_CALLBACK_URL:http://localhost:8080/api/billing/webhooks/mock}
+    order-ttl-minutes: ${BILLING_ORDER_TTL_MINUTES:30}
+    reservation-ttl-minutes: ${COMMERCIAL_RESERVATION_TTL_MINUTES:10}
+    reservation-credit-micros: ${COMMERCIAL_RESERVATION_CREDIT_MICROS:1000000}
+    free-credit-micros: ${COMMERCIAL_FREE_CREDIT_MICROS:100000000}
+    fulfillment-scan-millis: ${PAYMENT_FULFILLMENT_SCAN_MILLIS:2000}
+    settlement-scan-millis: ${COMMERCIAL_SETTLEMENT_SCAN_MILLIS:10000}
+    maintenance-scan-millis: ${BILLING_MAINTENANCE_SCAN_MILLIS:60000}
   redis:
     enabled: ${REDIS_ENABLED:false}
   minio:
