@@ -1185,21 +1185,24 @@ public class BillingService {
             String orderNo,
             BillingRequests.CreateRefund request
     ) {
-        Map<String, Object> order = requireOrder(safe(orderNo, 64), true);
+        String normalizedOrderNo = safe(orderNo, 64);
+        String requestId = safe(request.requestId(), 128);
+        Map<String, Object> order = requireOrder(normalizedOrderNo, true);
+        List<Map<String, Object>> existing = jdbcTemplate.queryForList(
+                "SELECT refund_no FROM refund_order WHERE order_id = ? AND request_id = ?",
+                order.get("id"),
+                requestId
+        );
+        if (!existing.isEmpty()) {
+            metrics.duplicatePrevented();
+            return requireRefund(String.valueOf(existing.get(0).get("refund_no")), false);
+        }
         if (!"FULFILLED".equals(normalize(String.valueOf(order.get("status"))))) {
             throw conflict("只有已完成订单可以发起退款。");
         }
         Map<String, Object> payment = currentPayment(number(order.get("id")));
         if (payment == null || !"SUCCEEDED".equals(normalize(String.valueOf(payment.get("status"))))) {
             throw conflict("订单没有已确认的支付单。");
-        }
-        List<Map<String, Object>> existing = jdbcTemplate.queryForList(
-                "SELECT refund_no FROM refund_order WHERE order_id = ? AND request_id = ?",
-                order.get("id"),
-                safe(request.requestId(), 128)
-        );
-        if (!existing.isEmpty()) {
-            return requireRefund(String.valueOf(existing.get(0).get("refund_no")), false);
         }
         long refundable = number(order.get("paid_amount_minor")) - aggregateLong(
                 """
@@ -1218,7 +1221,7 @@ public class BillingService {
                 FROM entitlement_grant
                 WHERE source_type = 'ORDER' AND source_id = ?
                 """,
-                orderNo
+                normalizedOrderNo
         ) > 0;
         String status = consumed ? "REVIEW_REQUIRED" : "PROCESSING";
         String refundNo = businessNo("R");
@@ -1233,7 +1236,7 @@ public class BillingService {
                 """,
                 nextId(),
                 refundNo,
-                safe(request.requestId(), 128),
+                requestId,
                 order.get("id"),
                 payment.get("id"),
                 order.get("user_id"),
@@ -1968,6 +1971,7 @@ public class BillingService {
         response.put("paymentStatus", row.get("payment_status"));
         response.put("paymentProvider", row.get("payment_provider"));
         response.put("refundStatus", row.get("refund_status"));
+        response.put("refundSucceededAt", row.get("refund_succeeded_at"));
         response.put("expiresAt", row.get("expires_at"));
         response.put("paidAt", row.get("paid_at"));
         response.put("fulfilledAt", row.get("fulfilled_at"));
@@ -2003,6 +2007,7 @@ public class BillingService {
             row.put("payment_status", resultSet.getString("payment_status"));
             row.put("payment_provider", resultSet.getString("payment_provider"));
             row.put("refund_status", resultSet.getString("refund_status"));
+            row.put("refund_succeeded_at", localDateTime(resultSet.getObject("refund_succeeded_at")));
         } catch (SQLException ignored) {
             // The internal locking query intentionally selects only the order table.
         }
@@ -2070,7 +2075,9 @@ public class BillingService {
                        (SELECT p.provider FROM payment_attempt p
                         WHERE p.order_id = o.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS payment_provider,
                        (SELECT r.status FROM refund_order r
-                        WHERE r.order_id = o.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS refund_status
+                        WHERE r.order_id = o.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS refund_status,
+                       (SELECT r.succeeded_at FROM refund_order r
+                        WHERE r.order_id = o.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS refund_succeeded_at
                 FROM billing_order o
                 """;
     }
