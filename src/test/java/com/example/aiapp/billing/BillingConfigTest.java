@@ -31,6 +31,50 @@ class BillingConfigTest {
     }
 
     @Test
+    void productionCanStayInPlatformPendingModeWithCheckoutDisabled() {
+        Environment environment = productionEnvironment();
+        PaymentGateway gateway = mock(PaymentGateway.class);
+        when(gateway.provider()).thenReturn("MOCK");
+        ApplicationRunner runner = new BillingConfig().billingProductionValidator(
+                environment,
+                properties("MOCK", false),
+                gateway
+        );
+
+        assertThatCode(() -> runner.run(mock(ApplicationArguments.class))).doesNotThrowAnyException();
+    }
+
+    @Test
+    void productionQuotaEnforcementRequiresCommercialLedger() {
+        Environment environment = productionEnvironment();
+        PaymentGateway gateway = mock(PaymentGateway.class);
+        ApplicationRunner runner = new BillingConfig().billingProductionValidator(
+                environment,
+                properties("MOCK", false, false, false, true),
+                gateway
+        );
+
+        assertThatThrownBy(() -> runner.run(mock(ApplicationArguments.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("requires the commercial ledger");
+    }
+
+    @Test
+    void productionQuotaEnforcementRejectsShadowSettlement() {
+        Environment environment = productionEnvironment();
+        PaymentGateway gateway = mock(PaymentGateway.class);
+        ApplicationRunner runner = new BillingConfig().billingProductionValidator(
+                environment,
+                properties("MOCK", false, true, true, true),
+                gateway
+        );
+
+        assertThatThrownBy(() -> runner.run(mock(ApplicationArguments.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("requires active settlement");
+    }
+
+    @Test
     void nonProductionCanUseMockForSandboxDevelopment() {
         Environment environment = mock(Environment.class);
         when(environment.acceptsProfiles(Profiles.of("prod", "production"))).thenReturn(false);
@@ -52,11 +96,21 @@ class BillingConfigTest {
     }
 
     private static BillingProperties properties(String provider, boolean checkout) {
+        return properties(provider, checkout, true, true, false);
+    }
+
+    private static BillingProperties properties(
+            String provider,
+            boolean checkout,
+            boolean ledger,
+            boolean settlementShadow,
+            boolean quotaEnforcement
+    ) {
         return new BillingProperties(
                 true,
-                true,
-                true,
-                false,
+                ledger,
+                settlementShadow,
+                quotaEnforcement,
                 checkout,
                 true,
                 true,

@@ -22,8 +22,20 @@ public class BillingConfig {
             PaymentGateway gateway
     ) {
         return args -> {
-            if (!environment.acceptsProfiles(Profiles.of("prod", "production"))
-                    || !properties.checkoutEnabled()) {
+            if (!environment.acceptsProfiles(Profiles.of("prod", "production"))) {
+                return;
+            }
+            if (properties.quotaEnforcementEnabled() && !properties.ledgerEnabled()) {
+                throw new IllegalStateException(
+                        "Production quota enforcement requires the commercial ledger."
+                );
+            }
+            if (properties.quotaEnforcementEnabled() && properties.settlementShadowEnabled()) {
+                throw new IllegalStateException(
+                        "Production quota enforcement requires active settlement."
+                );
+            }
+            if (!properties.checkoutEnabled()) {
                 return;
             }
             String provider = normalized(properties.paymentProvider());
