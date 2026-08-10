@@ -127,6 +127,10 @@ public class ChatServiceImpl implements ChatService {
             }
             throw exception;
         }
+        ChatMessageEntity userEntity = saveMessage(conversationId, turnId, "user", historyContent(userMessage), Map.of());
+        if (chatAttachmentService != null) {
+            chatAttachmentService.bind(userId, conversationId, userEntity.getId(), request.attachmentIds());
+        }
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
@@ -139,13 +143,9 @@ public class ChatServiceImpl implements ChatService {
                 attachments,
                 reservation == null ? null : reservation.traceId(),
                 reservation == null ? null : reservation.reservationId(),
-                usageBudget(reservation)
+                usageBudget(reservation),
+                String.valueOf(userEntity.getId())
         );
-
-        ChatMessageEntity userEntity = saveMessage(conversationId, turnId, "user", historyContent(userMessage), Map.of());
-        if (chatAttachmentService != null) {
-            chatAttachmentService.bind(userId, conversationId, userEntity.getId(), request.attachmentIds());
-        }
         AiChatResponseDTO aiResponse;
         try {
             aiResponse = aiServiceClient.chat(aiRequest);
@@ -157,7 +157,20 @@ public class ChatServiceImpl implements ChatService {
                 billingService.releaseCommercialReservation(commercialReservation);
             }
         }
-        saveMessage(conversationId, "assistant", aiResponse.answer());
+        Map<String, Object> assistantMetadata = new LinkedHashMap<>();
+        assistantMetadata.put("turnId", turnId);
+        assistantMetadata.put("phase", "COMPLETED");
+        assistantMetadata.put("statusText", "回复完成");
+        assistantMetadata.put("usedMemories", aiResponse.usedMemories() == null ? List.of() : aiResponse.usedMemories());
+        assistantMetadata.put("memoryExclusions", aiResponse.memoryExclusions() == null ? Map.of() : aiResponse.memoryExclusions());
+        assistantMetadata.put(
+                "memoryExplanationVersion",
+                StringUtils.isBlank(aiResponse.memoryExplanationVersion()) ? "v1" : aiResponse.memoryExplanationVersion()
+        );
+        if (aiResponse.usage() != null) {
+            assistantMetadata.put("usage", aiResponse.usage());
+        }
+        saveMessage(conversationId, turnId, "assistant", aiResponse.answer(), assistantMetadata);
         return new ChatResponseVO(
                 conversationId,
                 aiResponse.answer(),
@@ -173,7 +186,10 @@ public class ChatServiceImpl implements ChatService {
                 aiResponse.executionSuggestions() == null ? List.of() : aiResponse.executionSuggestions(),
                 aiResponse.projectContext() == null ? java.util.Map.of() : aiResponse.projectContext(),
                 aiResponse.review() == null ? java.util.Map.of() : aiResponse.review(),
-                aiResponse.usage() == null ? new com.example.aiapp.domain.dto.UsageDTO(0, 0) : aiResponse.usage()
+                aiResponse.usage() == null ? new com.example.aiapp.domain.dto.UsageDTO(0, 0) : aiResponse.usage(),
+                aiResponse.usedMemories() == null ? List.of() : aiResponse.usedMemories(),
+                aiResponse.memoryExclusions() == null ? Map.of() : aiResponse.memoryExclusions(),
+                StringUtils.isBlank(aiResponse.memoryExplanationVersion()) ? "v1" : aiResponse.memoryExplanationVersion()
         );
     }
 
@@ -199,6 +215,7 @@ public class ChatServiceImpl implements ChatService {
             if (!StringUtils.isBlank(existing.getContent())) {
                 chunkConsumer.accept(sse("delta", Map.of("text", existing.getContent())));
             }
+            chunkConsumer.accept(sse("meta", memoryReplayMetadata(metadata)));
             chunkConsumer.accept(sse("turn.status", Map.of(
                     "turnId", turnId,
                     "phase", stringValue(metadata.getOrDefault("phase", "COMPLETED")),
@@ -243,6 +260,15 @@ public class ChatServiceImpl implements ChatService {
             }
             throw exception;
         }
+        ChatMessageEntity sourceUserEntity;
+        if (retrying) {
+            sourceUserEntity = retryUser;
+        } else {
+            sourceUserEntity = saveMessage(conversationId, turnId, "user", historyContent(userMessage), Map.of());
+            if (chatAttachmentService != null) {
+                chatAttachmentService.bind(userId, conversationId, sourceUserEntity.getId(), request.attachmentIds());
+            }
+        }
         AiChatRequestDTO aiRequest = new AiChatRequestDTO(
                 String.valueOf(userId),
                 conversationId,
@@ -255,15 +281,9 @@ public class ChatServiceImpl implements ChatService {
                 attachments,
                 reservation == null ? null : reservation.traceId(),
                 reservation == null ? null : reservation.reservationId(),
-                usageBudget(reservation)
+                usageBudget(reservation),
+                String.valueOf(sourceUserEntity.getId())
         );
-
-        if (!retrying) {
-            ChatMessageEntity userEntity = saveMessage(conversationId, turnId, "user", historyContent(userMessage), Map.of());
-            if (chatAttachmentService != null) {
-                chatAttachmentService.bind(userId, conversationId, userEntity.getId(), request.attachmentIds());
-            }
-        }
         StringBuilder assistantAnswer = new StringBuilder();
         StringBuilder sseBuffer = new StringBuilder();
         AtomicReference<String> upstreamPhase = new AtomicReference<>();
@@ -497,6 +517,18 @@ public class ChatServiceImpl implements ChatService {
                 case "meta" -> {
                     if (data.get("usage") instanceof Map<?, ?> usage) {
                         metadata.put("usage", new LinkedHashMap<>(usage));
+                        changed = true;
+                    }
+                    if (data.get("usedMemories") instanceof List<?> usedMemories) {
+                        metadata.put("usedMemories", new ArrayList<>(usedMemories));
+                        changed = true;
+                    }
+                    if (data.get("memoryExclusions") instanceof Map<?, ?> exclusions) {
+                        metadata.put("memoryExclusions", new LinkedHashMap<>(exclusions));
+                        changed = true;
+                    }
+                    if (data.get("memoryExplanationVersion") != null) {
+                        metadata.put("memoryExplanationVersion", String.valueOf(data.get("memoryExplanationVersion")));
                         changed = true;
                     }
                 }
@@ -783,10 +815,66 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private ChatResponseVO existingResponse(String conversationId, ChatMessageEntity existing) {
+        Map<String, Object> metadata = readMetadata(existing.getMetadataJson());
         return new ChatResponseVO(
                 conversationId, existing.getContent(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                List.of(), List.of(), List.of(), List.of(), List.of(), Map.of(), Map.of()
+                List.of(), List.of(), List.of(), List.of(), List.of(), Map.of(), Map.of(),
+                usageFromMetadata(metadata),
+                mapList(metadata.get("usedMemories")),
+                mapValue(metadata.get("memoryExclusions")),
+                stringValue(metadata.getOrDefault("memoryExplanationVersion", "v1"))
         );
+    }
+
+    private Map<String, Object> memoryReplayMetadata(Map<String, Object> metadata) {
+        Map<String, Object> replay = new LinkedHashMap<>();
+        replay.put("usedMemories", mapList(metadata.get("usedMemories")));
+        replay.put("memoryExclusions", mapValue(metadata.get("memoryExclusions")));
+        replay.put("memoryExplanationVersion", stringValue(metadata.getOrDefault("memoryExplanationVersion", "v1")));
+        if (metadata.get("usage") instanceof Map<?, ?> usage) {
+            replay.put("usage", new LinkedHashMap<>(usage));
+        }
+        return replay;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> mapList(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        return list.stream()
+                .filter(Map.class::isInstance)
+                .map(item -> (Map<String, Object>) new LinkedHashMap<>((Map<String, Object>) item))
+                .toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> mapValue(Object value) {
+        return value instanceof Map<?, ?> map
+                ? new LinkedHashMap<>((Map<String, Object>) map)
+                : Map.of();
+    }
+
+    private com.example.aiapp.domain.dto.UsageDTO usageFromMetadata(Map<String, Object> metadata) {
+        Map<String, Object> usage = mapValue(metadata.get("usage"));
+        return new com.example.aiapp.domain.dto.UsageDTO(
+                intValue(usage.get("promptTokens")),
+                intValue(usage.get("completionTokens")),
+                intValue(usage.get("callCount")),
+                longValue(usage.get("estimatedCostMicros")),
+                stringValue(usage.getOrDefault("measurementSource", "PENDING"))
+        );
+    }
+
+    private long longValue(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException exception) {
+            return 0L;
+        }
     }
 
     private String normalizedMessage(String message, List<String> attachmentIds) {

@@ -20,7 +20,10 @@ public record ChatResponseVO(
         List<Map<String, Object>> executionSuggestions,
         Map<String, Object> projectContext,
         Map<String, Object> review,
-        UsageDTO usage
+        UsageDTO usage,
+        List<Map<String, Object>> usedMemories,
+        Map<String, Object> memoryExclusions,
+        String memoryExplanationVersion
 ) {
     public ChatResponseVO(
             String conversationId,
@@ -53,7 +56,10 @@ public record ChatResponseVO(
                 executionSuggestions,
                 projectContext,
                 review,
-                new UsageDTO(0, 0)
+                new UsageDTO(0, 0),
+                List.of(),
+                Map.of(),
+                "v1"
         );
     }
 }

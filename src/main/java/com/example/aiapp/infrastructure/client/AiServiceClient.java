@@ -269,6 +269,77 @@ public class AiServiceClient {
                 .block();
     }
 
+    public Map<String, Object> getMemoryRecords(
+            String userId,
+            String status,
+            String query,
+            int limit
+    ) {
+        return aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/ai/memory/{userId}/records")
+                        .queryParamIfPresent("status", java.util.Optional.ofNullable(status))
+                        .queryParamIfPresent("query", java.util.Optional.ofNullable(query))
+                        .queryParam("limit", limit)
+                        .build(userId))
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getMemoryRecord(String userId, String memoryId) {
+        return getJson("/ai/memory/{userId}/records/{memoryId}", userId, memoryId);
+    }
+
+    public Map<String, Object> getMemoryRecordSources(String userId, String memoryId) {
+        return getJson("/ai/memory/{userId}/records/{memoryId}/sources", userId, memoryId);
+    }
+
+    public Map<String, Object> getMemoryInbox(String userId) {
+        return getJson("/ai/memory/{userId}/inbox", userId);
+    }
+
+    public Map<String, Object> resolveMemoryConflict(
+            String userId,
+            long conflictId,
+            Map<String, Object> request
+    ) {
+        return postJson(
+                "/ai/memory/{userId}/conflicts/{conflictId}:resolve",
+                request,
+                userId,
+                conflictId
+        );
+    }
+
+    public Map<String, Object> governMemoryRecord(
+            String userId,
+            String memoryId,
+            String action,
+            Map<String, Object> request
+    ) {
+        return postJson(
+                "/ai/memory/{userId}/records/{memoryId}:" + action,
+                request,
+                userId,
+                memoryId
+        );
+    }
+
+    public Map<String, Object> getMemoryPurgeJob(String userId, long jobId) {
+        return getJson("/ai/memory/{userId}/purge-jobs/{jobId}", userId, jobId);
+    }
+
+    public Map<String, Object> retryMemoryPurgeJob(String userId, long jobId) {
+        return postJson("/ai/memory/{userId}/purge-jobs/{jobId}:retry", Map.of(), userId, jobId);
+    }
+
+    public Map<String, Object> getMemoryGovernanceEvents(String userId) {
+        return getJson("/ai/memory/{userId}/governance-events", userId);
+    }
+
     public Map<String, Object> listProjects(String userId, String status, int limit) {
         return aiServiceWebClient.get()
                 .uri(uriBuilder -> uriBuilder

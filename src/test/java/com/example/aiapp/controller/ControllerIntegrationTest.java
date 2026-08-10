@@ -1013,6 +1013,79 @@ class ControllerIntegrationTest {
     }
 
     @Test
+    void v66MemoryRecordsAreUserScopedAndLimitIsClamped() throws Exception {
+        when(aiServiceClient.getMemoryRecords("42", "ACTIVE", "帽子", 300)).thenReturn(Map.of(
+                "items", List.of(Map.of("memoryId", "profile:101", "value", "不喜欢人物戴帽子")),
+                "nextCursor", ""
+        ));
+
+        mockMvc.perform(get("/memory/records")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .param("status", "ACTIVE")
+                        .param("query", "帽子")
+                        .param("limit", "999"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].memoryId").value("profile:101"));
+
+        verify(aiServiceClient).getMemoryRecords("42", "ACTIVE", "帽子", 300);
+    }
+
+    @Test
+    void v66CorrectionRequiresUuidAndUsesCurrentUser() throws Exception {
+        String requestId = "b91d3a4c-229e-47d7-a84b-86f9061f45a4";
+        when(aiServiceClient.governMemoryRecord(eq("42"), eq("profile:101"), eq("correct"), any()))
+                .thenReturn(Map.of("memory", Map.of("memoryId", "profile:101", "value", "不喜欢人物戴帽子")));
+
+        mockMvc.perform(post("/memory/records/profile:101:correct")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"value":"不喜欢人物戴帽子","clientRequestId":"not-a-uuid"}
+                                """))
+                .andExpect(status().isUnprocessableEntity());
+
+        mockMvc.perform(post("/memory/records/profile:101:correct")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"value":"不喜欢人物戴帽子","clientRequestId":"%s"}
+                                """.formatted(requestId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.memory.value").value("不喜欢人物戴帽子"));
+
+        ArgumentCaptor<Map<String, Object>> request = ArgumentCaptor.forClass(Map.class);
+        verify(aiServiceClient).governMemoryRecord(eq("42"), eq("profile:101"), eq("correct"), request.capture());
+        assertThat(request.getValue()).containsEntry("clientRequestId", requestId);
+    }
+
+    @Test
+    void v66ConflictResolutionRequiresAuthenticationAndForwardsOptimisticVersion() throws Exception {
+        String requestId = "1ef91744-8a86-4c2f-b2b7-5b5d246d3c4e";
+        when(aiServiceClient.resolveMemoryConflict(eq("42"), eq(9L), any())).thenReturn(Map.of(
+                "conflict", Map.of("id", 9, "status", "RESOLVED", "version", 2),
+                "resolution", "USE_CANDIDATE"
+        ));
+
+        mockMvc.perform(post("/memory/conflicts/9:resolve")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnauthorized());
+
+        mockMvc.perform(post("/memory/conflicts/9:resolve")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"resolution":"USE_CANDIDATE","expectedVersion":1,"clientRequestId":"%s"}
+                                """.formatted(requestId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conflict.status").value("RESOLVED"));
+
+        ArgumentCaptor<Map<String, Object>> request = ArgumentCaptor.forClass(Map.class);
+        verify(aiServiceClient).resolveMemoryConflict(eq("42"), eq(9L), request.capture());
+        assertThat(request.getValue()).containsEntry("expectedVersion", 1);
+    }
+
+    @Test
     void agentToolControllerUpdatesTodoDueAtWithCurrentUser() throws Exception {
         when(aiServiceClient.updateTodoDueAt(eq("42"), eq(88L), any())).thenReturn(Map.of(
                 "id", 88,

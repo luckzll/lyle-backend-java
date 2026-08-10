@@ -15,7 +15,8 @@ public record AiChatRequestDTO(
         List<AiChatAttachmentDTO> attachments,
         String traceId,
         String reservationId,
-        Map<String, Long> usageBudget
+        Map<String, Long> usageBudget,
+        String sourceMessageId
 ) {
     public AiChatRequestDTO(
             String userId,
@@ -40,7 +41,8 @@ public record AiChatRequestDTO(
                 attachments,
                 null,
                 null,
-                Map.of()
+                Map.of(),
+                null
         );
     }
 
@@ -66,7 +68,8 @@ public record AiChatRequestDTO(
                 List.of(),
                 null,
                 null,
-                Map.of()
+                Map.of(),
+                null
         );
     }
 }

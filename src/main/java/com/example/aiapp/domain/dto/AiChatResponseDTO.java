@@ -19,6 +19,31 @@ public record AiChatResponseDTO(
         List<Map<String, Object>> candidatePlans,
         List<Map<String, Object>> executionSuggestions,
         Map<String, Object> projectContext,
-        Map<String, Object> review
+        Map<String, Object> review,
+        List<Map<String, Object>> usedMemories,
+        Map<String, Object> memoryExclusions,
+        String memoryExplanationVersion
 ) {
+    public AiChatResponseDTO(
+            String answer,
+            List<SourceVO> sources,
+            UsageDTO usage,
+            List<Map<String, Object>> agentTrace,
+            List<Map<String, Object>> toolResults,
+            List<Map<String, Object>> candidateMemories,
+            List<Map<String, Object>> candidateTasks,
+            List<Map<String, Object>> candidateGoals,
+            List<Map<String, Object>> candidateDecisions,
+            List<Map<String, Object>> candidateOpenQuestions,
+            List<Map<String, Object>> candidatePlans,
+            List<Map<String, Object>> executionSuggestions,
+            Map<String, Object> projectContext,
+            Map<String, Object> review
+    ) {
+        this(
+                answer, sources, usage, agentTrace, toolResults, candidateMemories, candidateTasks,
+                candidateGoals, candidateDecisions, candidateOpenQuestions, candidatePlans,
+                executionSuggestions, projectContext, review, List.of(), Map.of(), "v1"
+        );
+    }
 }
