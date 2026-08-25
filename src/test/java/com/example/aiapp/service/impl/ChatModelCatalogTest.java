@@ -14,11 +14,11 @@ class ChatModelCatalogTest {
     void appliesEverySupportedPublicModelIdWithoutDroppingBaseConfig() {
         Map<String, String> base = Map.of("REVIEWER_ENABLED", "true");
 
-        assertRoute("qwen-fast", "qwen", "qwen3.5-flash", base);
-        assertRoute("gpt-5.4", "openai", "openai/gpt-5.4", base);
-        assertRoute("gpt-5.5", "openai", "openai/gpt-5.5", base);
-        assertRoute("claude-sonnet-4.6", "openai", "anthropic/claude-sonnet-4.6", base);
-        assertRoute("gemini-3.1-pro", "openai", "google/gemini-3.1-pro-preview", base);
+        assertRoute("qwen3.7-flash", "qwen", "qwen3.7-flash", base);
+        assertRoute("qwen3.7-plus", "qwen", "qwen3.7-plus", base);
+        assertRoute("qwen3.8-max", "qwen", "qwen3.8-max", base);
+        assertRoute("deepseek-v4-flash", "qwen", "deepseek-v4-flash", base);
+        assertRoute("deepseek-v4-pro", "qwen", "deepseek-v4-pro", base);
     }
 
     @Test
