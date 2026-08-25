@@ -14,7 +14,8 @@ final class ChatModelCatalog {
             "qwen3.7-plus", new ModelRoute("qwen", "qwen3.7-plus"),
             "qwen3.8-max", new ModelRoute("qwen", "qwen3.8-max"),
             "deepseek-v4-flash", new ModelRoute("qwen", "deepseek-v4-flash"),
-            "deepseek-v4-pro", new ModelRoute("qwen", "deepseek-v4-pro")
+            "deepseek-v4-pro", new ModelRoute("qwen", "deepseek-v4-pro"),
+            "kimi-k3", new ModelRoute("qwen", "kimi-k3")
     );
 
     private ChatModelCatalog() {

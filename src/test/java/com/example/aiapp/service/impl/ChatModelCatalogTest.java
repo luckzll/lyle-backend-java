@@ -19,6 +19,7 @@ class ChatModelCatalogTest {
         assertRoute("qwen3.8-max", "qwen", "qwen3.8-max", base);
         assertRoute("deepseek-v4-flash", "qwen", "deepseek-v4-flash", base);
         assertRoute("deepseek-v4-pro", "qwen", "deepseek-v4-pro", base);
+        assertRoute("kimi-k3", "qwen", "kimi-k3", base);
     }
 
     @Test
