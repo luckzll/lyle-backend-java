@@ -11,6 +11,9 @@ final class ChatModelCatalog {
 
     private static final Map<String, ModelRoute> ROUTES = Map.of(
             "qwen3.7-flash", new ModelRoute("qwen", "qwen3.7-flash"),
+            "gpt-5.5", new ModelRoute("openai", "openai/gpt-5.5"),
+            "claude-opus-4.6", new ModelRoute("openai", "anthropic/claude-opus-4.6"),
+            "gemini-3.5-flash", new ModelRoute("openai", "google/gemini-3.5-flash"),
             "qwen3.7-plus", new ModelRoute("qwen", "qwen3.7-plus"),
             "qwen3.8-max", new ModelRoute("qwen", "qwen3.8-max"),
             "deepseek-v4-flash", new ModelRoute("qwen", "deepseek-v4-flash"),
