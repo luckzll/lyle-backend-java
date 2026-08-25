@@ -1,6 +1,7 @@
 package com.example.aiapp.infrastructure.vector;
 
 import com.example.aiapp.config.QdrantProperties;
+import org.springframework.util.StringUtils;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -15,9 +16,11 @@ public class VectorStoreService {
 
     public VectorStoreService(QdrantProperties properties) {
         this.properties = properties;
-        this.qdrantWebClient = WebClient.builder()
-                .baseUrl(properties.endpoint())
-                .build();
+        WebClient.Builder builder = WebClient.builder().baseUrl(properties.endpoint());
+        if (StringUtils.hasText(properties.apiKey())) {
+            builder.defaultHeader("api-key", properties.apiKey());
+        }
+        this.qdrantWebClient = builder.build();
     }
 
     public void upsert(String collectionName, String id, List<Float> vector, String payload) {

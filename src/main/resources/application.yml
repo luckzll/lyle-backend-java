@@ -114,6 +114,7 @@ app:
   qdrant:
     enabled: ${QDRANT_ENABLED:false}
     endpoint: ${QDRANT_ENDPOINT:http://localhost:6333}
+    api-key: ${QDRANT_API_KEY:}
   tos:
     enabled: ${TOS_ENABLED:true}
     endpoint: ${TOS_ENDPOINT:tos-cn-shanghai.volces.com}

@@ -25,6 +25,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.validation.FieldError;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
 
@@ -159,9 +161,37 @@ public class AuthController {
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    ResponseEntity<Map<String, String>> invalidCredentials() {
+    ResponseEntity<Map<String, String>> invalidCredentials(
+            MethodArgumentNotValidException exception,
+            HttpServletRequest request
+    ) {
+        if (request.getRequestURI().endsWith("/auth/register")) {
+            String detail = exception.getBindingResult().getFieldErrors().stream()
+                    .map(FieldError::getDefaultMessage)
+                    .filter(message -> message != null && !message.isBlank())
+                    .findFirst()
+                    .orElse("注册信息不符合要求。");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("detail", detail));
+        }
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(Map.of("detail", "用户名或密码不正确，请重试。"));
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    ResponseEntity<Map<String, String>> rejectedAuthRequest(
+            ResponseStatusException exception,
+            HttpServletRequest request
+    ) {
+        String detail;
+        if (request.getRequestURI().endsWith("/auth/login")) {
+            detail = "用户名或密码不正确，请重试。";
+        } else {
+            detail = exception.getReason();
+            if (detail == null || detail.isBlank()) {
+                detail = "请求未能完成，请稍后重试。";
+            }
+        }
+        return ResponseEntity.status(exception.getStatusCode()).body(Map.of("detail", detail));
     }
 
     private String readRefreshCookie(HttpServletRequest request) {

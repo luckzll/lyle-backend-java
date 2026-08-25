@@ -53,6 +53,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
@@ -242,7 +243,22 @@ class ControllerIntegrationTest {
                         .content("""
                                 {"username":"new-user","password":"123456"}
                                 """))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("密码需要 8～128 个字符。"));
+    }
+
+    @Test
+    void registrationExplainsAnExistingUsername() throws Exception {
+        when(authService.register(any(AuthRequestDTO.class), any(), any()))
+                .thenThrow(new ResponseStatusException(HttpStatus.CONFLICT, "该用户名已被注册，请直接登录。"));
+
+        mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"existing-user","password":"12345678"}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("该用户名已被注册，请直接登录。"));
     }
 
     @Test

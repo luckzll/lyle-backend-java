@@ -47,10 +47,10 @@ public class AuthServiceImpl implements AuthService {
     @Transactional
     public AuthenticatedSession register(AuthRequestDTO request, String userAgent, String remoteAddress) {
         if (request.password().length() < 8) {
-            throw new ResponseStatusException(BAD_REQUEST, "用户名或密码不正确，请重试。");
+            throw new ResponseStatusException(BAD_REQUEST, "密码需要 8～128 个字符。");
         }
         if (userMapper.selectByUsername(request.username()) != null) {
-            throw new ResponseStatusException(CONFLICT, "用户名或密码不正确，请重试。");
+            throw new ResponseStatusException(CONFLICT, "该用户名已被注册，请直接登录。");
         }
 
         LocalDateTime now = LocalDateTime.now();
