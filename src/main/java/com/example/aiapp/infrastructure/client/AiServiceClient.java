@@ -58,6 +58,7 @@ public class AiServiceClient {
                 .uri("/ai/ingest")
                 .bodyValue(request)
                 .retrieve()
+                .onStatus(HttpStatusCode::isError, this::serviceError)
                 .bodyToMono(AiIngestResponseDTO.class)
                 .block();
     }

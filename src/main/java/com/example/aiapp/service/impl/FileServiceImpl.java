@@ -22,8 +22,11 @@ import org.springframework.web.server.ResponseStatusException;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
+import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @Service
@@ -32,6 +35,10 @@ public class FileServiceImpl implements FileService {
     private static final String KNOWLEDGE_BUCKET = "knowledge-files";
     private static final String STATUS_QUEUED = "queued";
     private static final String STATUS_FAILED = "failed";
+    private static final Set<String> SUPPORTED_KNOWLEDGE_EXTENSIONS = Set.of(
+            ".txt", ".md", ".csv", ".json", ".log",
+            ".pdf", ".docx", ".xlsx", ".xlsm", ".xls", ".pptx"
+    );
 
     private final KnowledgeFileMapper knowledgeFileMapper;
     private final KnowledgeBaseMapper knowledgeBaseMapper;
@@ -57,6 +64,12 @@ public class FileServiceImpl implements FileService {
     public FileUploadVO upload(Long userId, Long knowledgeBaseId, MultipartFile file) {
         ensureKnowledgeBaseOwnedByUser(userId, knowledgeBaseId);
         String originalFilename = file.getOriginalFilename() == null ? "upload.bin" : file.getOriginalFilename();
+        if (!isSupportedKnowledgeFile(originalFilename)) {
+            throw new ResponseStatusException(
+                    BAD_REQUEST,
+                    "暂不支持该文件格式，请上传 PDF、DOCX、XLS/XLSX、PPTX 或文本文件"
+            );
+        }
         String objectName = knowledgeBaseId + "/" + UUID.randomUUID() + "-" + originalFilename;
 
         try {
@@ -219,5 +232,11 @@ public class FileServiceImpl implements FileService {
         if (knowledgeBaseMapper.selectByIdAndUserId(knowledgeBaseId, userId) == null) {
             throw new ResponseStatusException(NOT_FOUND, "知识库不存在");
         }
+    }
+
+    static boolean isSupportedKnowledgeFile(String fileName) {
+        String normalized = fileName == null ? "" : fileName.trim().toLowerCase(Locale.ROOT);
+        int dotIndex = normalized.lastIndexOf('.');
+        return dotIndex >= 0 && SUPPORTED_KNOWLEDGE_EXTENSIONS.contains(normalized.substring(dotIndex));
     }
 }
