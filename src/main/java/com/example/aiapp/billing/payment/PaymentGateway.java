@@ -14,6 +14,8 @@ public interface PaymentGateway {
 
     RefundResult createRefund(CreateRefundCommand command);
 
+    RefundResult queryRefund(String paymentNo, String refundNo);
+
     record CreatePaymentCommand(
             String paymentNo,
             String orderNo,
@@ -43,6 +45,7 @@ public interface PaymentGateway {
             String refundNo,
             String paymentNo,
             long amountMinor,
+            long totalAmountMinor,
             String currency,
             String reason
     ) {

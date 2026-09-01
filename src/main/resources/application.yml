@@ -96,6 +96,24 @@ app:
     merchant-id: ${PAYMENT_MERCHANT_ID:lyle-local-sandbox}
     webhook-secret: ${PAYMENT_WEBHOOK_SECRET:}
     callback-url: ${PAYMENT_CALLBACK_URL:http://localhost:8080/api/billing/webhooks/mock}
+    alipay:
+      gateway-url: ${ALIPAY_GATEWAY_URL:https://openapi-sandbox.dl.alipaydev.com/gateway.do}
+      app-id: ${ALIPAY_APP_ID:}
+      app-private-key: ${ALIPAY_APP_PRIVATE_KEY:}
+      alipay-public-key: ${ALIPAY_PUBLIC_KEY:}
+      seller-id: ${ALIPAY_SELLER_ID:}
+      seller-email: ${ALIPAY_SELLER_EMAIL:}
+      notify-url: ${ALIPAY_NOTIFY_URL:}
+      return-url-base: ${ALIPAY_RETURN_URL_BASE:http://localhost:5173/billing/result}
+    wechat-pay:
+      app-id: ${WECHAT_PAY_APP_ID:}
+      merchant-id: ${WECHAT_PAY_MERCHANT_ID:}
+      merchant-serial-number: ${WECHAT_PAY_MERCHANT_SERIAL_NUMBER:}
+      merchant-private-key-path: ${WECHAT_PAY_MERCHANT_PRIVATE_KEY_PATH:}
+      api-v3-key: ${WECHAT_PAY_API_V3_KEY:}
+      wechat-pay-public-key-path: ${WECHAT_PAY_PUBLIC_KEY_PATH:}
+      wechat-pay-public-key-id: ${WECHAT_PAY_PUBLIC_KEY_ID:}
+      notify-url: ${WECHAT_PAY_NOTIFY_URL:}
     order-ttl-minutes: ${BILLING_ORDER_TTL_MINUTES:30}
     reservation-ttl-minutes: ${COMMERCIAL_RESERVATION_TTL_MINUTES:10}
     reservation-credit-micros: ${COMMERCIAL_RESERVATION_CREDIT_MICROS:1000000}

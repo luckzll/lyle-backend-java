@@ -1,6 +1,7 @@
 package com.example.aiapp.billing;
 
 import com.example.aiapp.billing.payment.PaymentGateway;
+import com.example.aiapp.billing.payment.WechatPayPaymentGateway;
 import com.example.aiapp.usage.UsageEventRequest;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -34,6 +35,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -207,6 +209,9 @@ public class BillingService {
         snapshot.put("pricingRules", jsonMap(price.get("pricing_rule_snapshot")));
 
         long amountMinor = number(price.get("amount_minor"));
+        if (amountMinor <= 0) {
+            throw badRequest("免费套餐无需创建支付订单。");
+        }
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime expiresAt = now.plusMinutes(Math.max(5, properties.orderTtlMinutes()));
         String orderNo = businessNo("L");
@@ -282,6 +287,34 @@ public class BillingService {
     }
 
     @Transactional
+    public Map<String, Object> refreshOrderStatus(long userId, String orderNo) {
+        require(properties.userViewEnabled());
+        Map<String, Object> order = scopedOrder(userId, safe(orderNo, 64), true);
+        if (!List.of("CREATED", "PENDING_PAYMENT").contains(normalize(String.valueOf(order.get("status"))))) {
+            return orderResponse(order);
+        }
+        Map<String, Object> payment = currentPayment(number(order.get("id")));
+        if (payment == null) {
+            return orderResponse(order);
+        }
+        PaymentGateway.PaymentResult result =
+                paymentGateway.queryPayment(String.valueOf(payment.get("payment_no")));
+        String providerStatus = normalize(result.status());
+        if ("SUCCEEDED".equals(providerStatus)) {
+            confirmPayment(
+                    String.valueOf(payment.get("payment_no")),
+                    result.providerTransactionId(),
+                    number(payment.get("amount_minor")),
+                    String.valueOf(payment.get("currency")),
+                    String.valueOf(payment.get("provider"))
+            );
+        } else if ("CLOSED".equals(providerStatus)) {
+            markPaymentAndOrderClosed(payment);
+        }
+        return order(userId, orderNo);
+    }
+
+    @Transactional
     public Map<String, Object> checkout(long userId, String orderNo) {
         require(properties.checkoutEnabled() && properties.userViewEnabled());
         if (!normalize(properties.paymentProvider()).equals(paymentGateway.provider())) {
@@ -306,19 +339,19 @@ public class BillingService {
         Map<String, Object> existing = currentPayment(number(order.get("id")));
         if (existing != null && "PENDING".equals(normalize(String.valueOf(existing.get("status"))))
                 && localDateTime(existing.get("expires_at")).isAfter(LocalDateTime.now())) {
-            return checkoutResponse(order, existing, null);
+            PaymentGateway.CheckoutResult restored = paymentGateway.createPayment(
+                    createPaymentCommand(
+                            order,
+                            String.valueOf(existing.get("payment_no")),
+                            localDateTime(existing.get("expires_at"))
+                    )
+            );
+            return checkoutResponse(order, existing, restored);
         }
 
         String paymentNo = businessNo("P");
         PaymentGateway.CheckoutResult result = paymentGateway.createPayment(
-                new PaymentGateway.CreatePaymentCommand(
-                        paymentNo,
-                        String.valueOf(order.get("order_no")),
-                        number(order.get("payable_amount_minor")),
-                        String.valueOf(order.get("currency")),
-                        snapshotName(order.get("product_snapshot")),
-                        orderExpiresAt
-                )
+                createPaymentCommand(order, paymentNo, orderExpiresAt)
         );
         LocalDateTime now = LocalDateTime.now();
         jdbcTemplate.update(
@@ -371,19 +404,16 @@ public class BillingService {
             if (!"PENDING".equals(normalize(result.status()))) {
                 throw conflict("支付状态暂时无法确认，请稍后重试。");
             }
-            paymentGateway.closePayment(String.valueOf(payment.get("payment_no")));
-            jdbcTemplate.update(
-                    """
-                    UPDATE payment_attempt
-                    SET status = 'CLOSED', closed_at = ?, updated_at = ?
-                    WHERE id = ? AND status IN ('INITIATED', 'PENDING')
-                    """,
-                    LocalDateTime.now(),
-                    LocalDateTime.now(),
-                    payment.get("id")
-            );
+            PaymentGateway.PaymentResult closeResult =
+                    paymentGateway.closePayment(String.valueOf(payment.get("payment_no")));
+            if (!"CLOSED".equals(normalize(closeResult.status()))) {
+                throw conflict("支付渠道暂未确认关单，请稍后重试。");
+            }
+            markPaymentAndOrderClosed(payment);
         }
-        closeExpiredOrder(number(order.get("id")));
+        if (payment == null) {
+            closeExpiredOrder(number(order.get("id")));
+        }
         return order(userId, orderNo);
     }
 
@@ -560,6 +590,141 @@ public class BillingService {
         }
     }
 
+    @Transactional(noRollbackFor = ResponseStatusException.class)
+    public boolean processAlipayNotification(Map<String, String> parameters) {
+        require(properties.webhookEnabled());
+        if (!"ALIPAY".equals(normalize(properties.paymentProvider()))
+                || !"ALIPAY".equals(paymentGateway.provider())) {
+            throw badRequest("当前环境未启用支付宝通知。");
+        }
+        String eventId = requiredNotificationField(parameters, "notify_id", 128);
+        String paymentNo = requiredNotificationField(parameters, "out_trade_no", 64);
+        String payloadHash;
+        try {
+            payloadHash = sha256(objectMapper.writeValueAsBytes(new TreeMap<>(parameters)));
+        } catch (Exception exception) {
+            throw badRequest("支付宝通知格式无效。");
+        }
+        Map<String, Object> payment = requirePayment(paymentNo, true);
+        long amountMinor = alipayAmountMinor(parameters.get("total_amount"));
+        if (!"ALIPAY".equals(normalize(String.valueOf(payment.get("provider"))))
+                || !"CNY".equals(normalize(String.valueOf(payment.get("currency"))))
+                || number(payment.get("amount_minor")) != amountMinor) {
+            throw badRequest("支付宝通知的订单、金额或币种不匹配。");
+        }
+        int inserted = recordWebhook(
+                "ALIPAY",
+                eventId,
+                payloadHash,
+                true,
+                "RECEIVED",
+                paymentNo,
+                null
+        );
+        if (inserted == 0) {
+            metrics.duplicatePrevented();
+            return true;
+        }
+        try {
+            if (isPaidAlipayNotification(parameters)) {
+                String tradeNo = requiredNotificationField(parameters, "trade_no", 128);
+                confirmPayment(paymentNo, tradeNo, amountMinor, "CNY", "ALIPAY");
+            } else if ("TRADE_CLOSED".equals(parameters.get("trade_status"))) {
+                markPaymentAndOrderClosed(payment);
+            }
+            jdbcTemplate.update(
+                    """
+                    UPDATE payment_webhook_event
+                    SET process_status = 'PROCESSED', processed_at = ?
+                    WHERE provider = 'ALIPAY' AND provider_event_id = ?
+                    """,
+                    LocalDateTime.now(),
+                    eventId
+            );
+            return true;
+        } catch (RuntimeException exception) {
+            jdbcTemplate.update(
+                    """
+                    UPDATE payment_webhook_event
+                    SET process_status = 'FAILED', processed_at = ?, error_code = 'VALIDATION_FAILED'
+                    WHERE provider = 'ALIPAY' AND provider_event_id = ?
+                    """,
+                    LocalDateTime.now(),
+                    eventId
+            );
+            throw exception;
+        }
+    }
+
+    @Transactional(noRollbackFor = ResponseStatusException.class)
+    public boolean processWechatPayNotification(
+            WechatPayPaymentGateway.VerifiedPaymentNotification notification
+    ) {
+        require(properties.webhookEnabled());
+        if (!"WECHAT_PAY".equals(normalize(properties.paymentProvider()))
+                || !"WECHAT_PAY".equals(paymentGateway.provider())) {
+            throw badRequest("当前环境未启用微信支付通知。");
+        }
+        Map<String, Object> payment = requirePayment(notification.paymentNo(), true);
+        if (!"WECHAT_PAY".equals(normalize(String.valueOf(payment.get("provider"))))
+                || !normalize(notification.currency())
+                .equals(normalize(String.valueOf(payment.get("currency"))))
+                || number(payment.get("amount_minor")) != notification.amountMinor()) {
+            throw badRequest("微信支付通知的订单、金额或币种不匹配。");
+        }
+        int inserted = recordWebhook(
+                "WECHAT_PAY",
+                notification.eventId(),
+                notification.payloadHash(),
+                true,
+                "RECEIVED",
+                notification.paymentNo(),
+                null
+        );
+        if (inserted == 0) {
+            metrics.duplicatePrevented();
+            return true;
+        }
+        try {
+            String status = normalize(notification.status());
+            if ("SUCCEEDED".equals(status)) {
+                if (!StringUtils.hasText(notification.providerTransactionId())) {
+                    throw badRequest("微信支付通知缺少平台交易号。");
+                }
+                confirmPayment(
+                        notification.paymentNo(),
+                        notification.providerTransactionId(),
+                        notification.amountMinor(),
+                        notification.currency(),
+                        "WECHAT_PAY"
+                );
+            } else if ("CLOSED".equals(status)) {
+                markPaymentAndOrderClosed(payment);
+            }
+            jdbcTemplate.update(
+                    """
+                    UPDATE payment_webhook_event
+                    SET process_status = 'PROCESSED', processed_at = ?
+                    WHERE provider = 'WECHAT_PAY' AND provider_event_id = ?
+                    """,
+                    LocalDateTime.now(),
+                    notification.eventId()
+            );
+            return true;
+        } catch (RuntimeException exception) {
+            jdbcTemplate.update(
+                    """
+                    UPDATE payment_webhook_event
+                    SET process_status = 'FAILED', processed_at = ?, error_code = 'VALIDATION_FAILED'
+                    WHERE provider = 'WECHAT_PAY' AND provider_event_id = ?
+                    """,
+                    LocalDateTime.now(),
+                    notification.eventId()
+            );
+            throw exception;
+        }
+    }
+
     public List<String> pendingFulfillmentOrders(int limit) {
         if (!properties.fulfillmentWorkerEnabled()) {
             return List.of();
@@ -620,19 +785,16 @@ public class BillingService {
             if (!"PENDING".equals(normalize(result.status()))) {
                 return;
             }
-            paymentGateway.closePayment(String.valueOf(payment.get("payment_no")));
-            jdbcTemplate.update(
-                    """
-                    UPDATE payment_attempt
-                    SET status = 'CLOSED', closed_at = ?, updated_at = ?
-                    WHERE id = ? AND status IN ('INITIATED', 'PENDING')
-                    """,
-                    LocalDateTime.now(),
-                    LocalDateTime.now(),
-                    payment.get("id")
-            );
+            PaymentGateway.PaymentResult closeResult =
+                    paymentGateway.closePayment(String.valueOf(payment.get("payment_no")));
+            if (!"CLOSED".equals(normalize(closeResult.status()))) {
+                return;
+            }
+            markPaymentAndOrderClosed(payment);
         }
-        closeExpiredOrder(number(order.get("id")));
+        if (payment == null) {
+            closeExpiredOrder(number(order.get("id")));
+        }
     }
 
     public List<Long> expiredGrantIds(int limit) {
@@ -651,6 +813,45 @@ public class BillingService {
                 (resultSet, rowNum) -> resultSet.getLong(1),
                 Math.max(1, Math.min(limit, 200))
         );
+    }
+
+    public List<String> pendingRefundNumbers(int limit) {
+        if (!properties.checkoutEnabled()) {
+            return List.of();
+        }
+        return jdbcTemplate.query(
+                """
+                SELECT refund_no
+                FROM refund_order
+                WHERE status = 'PROCESSING'
+                  AND updated_at <= DATE_SUB(CURRENT_TIMESTAMP(6), INTERVAL 10 SECOND)
+                ORDER BY updated_at
+                LIMIT ?
+                """,
+                (resultSet, rowNum) -> resultSet.getString(1),
+                Math.max(1, Math.min(limit, 100))
+        );
+    }
+
+    @Transactional
+    public void refreshPendingRefund(String refundNo) {
+        Map<String, Object> refund = requireRefund(refundNo, true);
+        if (!"PROCESSING".equals(normalize(String.valueOf(refund.get("status"))))) {
+            return;
+        }
+        PaymentGateway.RefundResult result = paymentGateway.queryRefund(
+                String.valueOf(refund.get("payment_no")),
+                refundNo
+        );
+        if ("SUCCEEDED".equals(normalize(result.status()))) {
+            completeRefund(refundNo, false, refund, result);
+        } else {
+            jdbcTemplate.update(
+                    "UPDATE refund_order SET updated_at = ? WHERE id = ?",
+                    LocalDateTime.now(),
+                    refund.get("id")
+            );
+        }
     }
 
     @Transactional
@@ -1603,10 +1804,19 @@ public class BillingService {
                         refundNo,
                         String.valueOf(payment.get("payment_no")),
                         number(refund.get("amount_minor")),
+                        number(payment.get("amount_minor")),
                         String.valueOf(refund.get("currency")),
                         String.valueOf(refund.get("reason_code"))
                 )
         );
+        if ("PENDING".equals(normalize(result.status()))) {
+            jdbcTemplate.update(
+                    "UPDATE refund_order SET status = 'PROCESSING', updated_at = ? WHERE id = ?",
+                    LocalDateTime.now(),
+                    refund.get("id")
+            );
+            return;
+        }
         if (!"SUCCEEDED".equals(normalize(result.status()))) {
             jdbcTemplate.update(
                     "UPDATE refund_order SET status = 'FAILED', updated_at = ? WHERE id = ?",
@@ -1615,6 +1825,15 @@ public class BillingService {
             );
             return;
         }
+        completeRefund(refundNo, approvedConsumed, refund, result);
+    }
+
+    private void completeRefund(
+            String refundNo,
+            boolean approvedConsumed,
+            Map<String, Object> refund,
+            PaymentGateway.RefundResult result
+    ) {
         String orderNo = String.valueOf(refund.get("order_no"));
         List<Map<String, Object>> grants = jdbcTemplate.queryForList(
                 """
@@ -1949,6 +2168,45 @@ public class BillingService {
         return response;
     }
 
+    private PaymentGateway.CreatePaymentCommand createPaymentCommand(
+            Map<String, Object> order,
+            String paymentNo,
+            LocalDateTime expiresAt
+    ) {
+        return new PaymentGateway.CreatePaymentCommand(
+                paymentNo,
+                String.valueOf(order.get("order_no")),
+                number(order.get("payable_amount_minor")),
+                String.valueOf(order.get("currency")),
+                snapshotName(order.get("product_snapshot")),
+                expiresAt
+        );
+    }
+
+    private void markPaymentAndOrderClosed(Map<String, Object> payment) {
+        LocalDateTime now = LocalDateTime.now();
+        jdbcTemplate.update(
+                """
+                UPDATE payment_attempt
+                SET status = 'CLOSED', closed_at = ?, updated_at = ?
+                WHERE id = ? AND status IN ('INITIATED', 'PENDING')
+                """,
+                now,
+                now,
+                payment.get("id")
+        );
+        jdbcTemplate.update(
+                """
+                UPDATE billing_order
+                SET status = 'CLOSED', closed_at = ?, updated_at = ?
+                WHERE id = ? AND status IN ('CREATED', 'PENDING_PAYMENT')
+                """,
+                now,
+                now,
+                payment.get("order_id")
+        );
+    }
+
     private Map<String, Object> orderRow(ResultSet resultSet) throws SQLException {
         return orderResponse(orderDatabaseRow(resultSet));
     }
@@ -2252,6 +2510,37 @@ public class BillingService {
             return objectMapper.writeValueAsString(value == null ? Map.of() : value);
         } catch (Exception exception) {
             throw new IllegalStateException("Failed to serialize billing snapshot.", exception);
+        }
+    }
+
+    private static boolean isPaidAlipayNotification(Map<String, String> parameters) {
+        String status = parameters.get("trade_status");
+        return ("TRADE_SUCCESS".equals(status) || "TRADE_FINISHED".equals(status))
+                && !StringUtils.hasText(parameters.get("out_biz_no"))
+                && !StringUtils.hasText(parameters.get("gmt_refund"))
+                && !StringUtils.hasText(parameters.get("refund_fee"));
+    }
+
+    private static String requiredNotificationField(
+            Map<String, String> parameters,
+            String field,
+            int maxLength
+    ) {
+        String value = parameters.get(field);
+        if (!StringUtils.hasText(value) || value.length() > maxLength) {
+            throw badRequest("支付宝通知缺少必要字段。");
+        }
+        return value.trim();
+    }
+
+    private static long alipayAmountMinor(String value) {
+        if (!StringUtils.hasText(value)) {
+            throw badRequest("支付宝通知缺少支付金额。");
+        }
+        try {
+            return new BigDecimal(value.trim()).movePointRight(2).longValueExact();
+        } catch (ArithmeticException | NumberFormatException exception) {
+            throw badRequest("支付宝通知金额格式无效。");
         }
     }
 
