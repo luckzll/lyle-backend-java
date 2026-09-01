@@ -63,7 +63,7 @@ public class BillingController {
 
     @GetMapping("/orders/{orderNo}/status")
     Map<String, Object> orderStatus(@PathVariable String orderNo) {
-        return billingService.order(CurrentUserUtils.currentUserId(), orderNo);
+        return billingService.refreshOrderStatus(CurrentUserUtils.currentUserId(), orderNo);
     }
 
     @PostMapping("/orders/{orderNo}/close")

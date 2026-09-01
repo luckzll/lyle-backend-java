@@ -86,8 +86,9 @@ public class UsageService {
                 validateEvent(event);
                 long userId = Long.parseLong(event.userId());
                 LocalDateTime occurredAt = occurredAt(event.occurredAt());
-                if (occurredAt.isBefore(LocalDateTime.now().minusDays(7))
-                        || occurredAt.isAfter(LocalDateTime.now().plusMinutes(10))) {
+                LocalDateTime now = LocalDateTime.now(BUSINESS_ZONE);
+                if (occurredAt.isBefore(now.minusDays(7))
+                        || occurredAt.isAfter(now.plusMinutes(10))) {
                     rejected.add(new UsageBatchResponse.RejectedEvent(event.eventId(), "OCCURRED_AT_OUT_OF_RANGE"));
                     continue;
                 }

@@ -8,8 +8,10 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.TimeZone;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -58,6 +60,36 @@ class UsageServiceTest {
 
         assertThat(accepted.acceptedEventIds()).containsExactly("event-accepted");
         assertThat(duplicate.duplicateEventIds()).containsExactly("event-duplicate");
+    }
+
+    @Test
+    void acceptsCurrentUtcEventWhenJvmDefaultTimezoneIsUtc() {
+        TimeZone original = TimeZone.getDefault();
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+        try {
+            JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+            when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
+            UsageService service = new UsageService(
+                    jdbcTemplate,
+                    new UsageProperties(true, false, true, "internal", 10)
+            );
+            UsageEventRequest base = event("event-current-utc", "LLM_TEXT", 10);
+            UsageEventRequest currentUtc = new UsageEventRequest(
+                    base.eventId(), base.userId(), base.conversationId(), base.turnId(), base.traceId(),
+                    base.reservationId(), base.callType(), base.taskType(), base.provider(), base.model(),
+                    base.routeVersion(), base.inputTokens(), base.outputTokens(), base.cacheReadTokens(),
+                    base.cacheWriteTokens(), base.usageSource(), base.estimatedCostMicros(),
+                    base.pricingVersion(), base.currency(), base.latencyMillis(), base.status(),
+                    base.errorCategory(), OffsetDateTime.now(ZoneOffset.UTC)
+            );
+
+            UsageBatchResponse response = service.acceptBatch(new UsageBatchRequest(List.of(currentUtc)));
+
+            assertThat(response.acceptedEventIds()).containsExactly("event-current-utc");
+            assertThat(response.rejectedEvents()).isEmpty();
+        } finally {
+            TimeZone.setDefault(original);
+        }
     }
 
     @Test

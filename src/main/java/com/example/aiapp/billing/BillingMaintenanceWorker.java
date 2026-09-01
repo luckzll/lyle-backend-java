@@ -28,5 +28,12 @@ public class BillingMaintenanceWorker {
                 // The immutable grant and idempotency key make the next scan safe.
             }
         }
+        for (String refundNo : billingService.pendingRefundNumbers(100)) {
+            try {
+                billingService.refreshPendingRefund(refundNo);
+            } catch (RuntimeException ignored) {
+                // Unknown provider state remains PROCESSING and is queried again later.
+            }
+        }
     }
 }

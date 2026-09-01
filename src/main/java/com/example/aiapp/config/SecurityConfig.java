@@ -47,6 +47,7 @@ public class SecurityConfig {
                                 "/auth/login",
                                 "/auth/refresh"
                         ).permitAll()
+                        .requestMatchers(HttpMethod.GET, "/billing/catalog").permitAll()
                         .requestMatchers(
                                 "/health",
                                 "/internal/ai-usage/events:batch",
