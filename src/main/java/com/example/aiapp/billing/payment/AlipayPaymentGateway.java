@@ -76,7 +76,7 @@ public class AlipayPaymentGateway implements PaymentGateway {
             request.setBizModel(model);
 
             AlipayTradePagePayResponse response = client().pageExecute(request, "POST");
-            if (!StringUtils.hasText(response.getBody())) {
+            if (!response.isSuccess() || !StringUtils.hasText(response.getBody())) {
                 throw unavailable();
             }
             return new CheckoutResult(

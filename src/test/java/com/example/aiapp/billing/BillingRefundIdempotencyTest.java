@@ -1,6 +1,8 @@
 package com.example.aiapp.billing;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.aiapp.service.BillingRefundService;
+import com.example.aiapp.service.impl.BillingRefundServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -16,7 +18,7 @@ class BillingRefundIdempotencyTest {
     @Test
     void successfulRefundReplayReturnsOriginalResultBeforeOrderStatusValidation() {
         RefundReplayJdbcTemplate jdbcTemplate = new RefundReplayJdbcTemplate();
-        BillingService service = new BillingService(
+        BillingRefundService service = new BillingRefundServiceImpl(
                 jdbcTemplate,
                 new ObjectMapper(),
                 mock(BillingProperties.class),

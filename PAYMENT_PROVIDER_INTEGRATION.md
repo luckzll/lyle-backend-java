@@ -48,6 +48,24 @@ ALIPAY_RETURN_URL_BASE=http://localhost:5173/billing/result
 
 本地没有公网 HTTPS 地址时，`ALIPAY_NOTIFY_URL` 留空，系统通过 `alipay.trade.query` 主动补单；通知处理代码仍保留在 `/api/billing/webhooks/alipay/notify`。生产环境必须使用支付宝生产网关，并将通知与回跳地址都配置为真实 HTTPS 地址。
 
+生产部署使用以下值；`PAYMENT_MERCHANT_ID` 与 `ALIPAY_SELLER_ID` 均填写支付宝商户 PID。`ALIPAY_SELLER_ID` 与 `ALIPAY_SELLER_EMAIL` 至少填写一项，优先填写 PID。同步回跳页只展示服务端查询到的订单状态，不以支付宝回跳参数作为支付成功依据。
+
+```dotenv
+PAYMENT_PROVIDER=ALIPAY
+PAYMENT_MERCHANT_ID=
+PAYMENT_CHECKOUT_ENABLED=true
+PAYMENT_WEBHOOK_ENABLED=true
+PAYMENT_FULFILLMENT_WORKER_ENABLED=true
+ALIPAY_GATEWAY_URL=https://openapi.alipay.com/gateway.do
+ALIPAY_APP_ID=
+ALIPAY_APP_PRIVATE_KEY=
+ALIPAY_PUBLIC_KEY=
+ALIPAY_SELLER_ID=
+ALIPAY_SELLER_EMAIL=
+ALIPAY_NOTIFY_URL=https://luckyzll.site/api/billing/webhooks/alipay/notify
+ALIPAY_RETURN_URL_BASE=https://luckyzll.site/billing/result
+```
+
 ## 微信 Native 支付配置
 
 网站收银台使用微信支付 API v3 Native 下单，Java 服务将微信返回的 `code_url` 交给 Vue 生成二维码。支付结果只以服务端验签并解密的通知，或服务端主动查单为准。
