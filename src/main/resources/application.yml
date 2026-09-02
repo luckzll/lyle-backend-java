@@ -56,6 +56,8 @@ ai:
     response-timeout-seconds: ${AI_SERVICE_RESPONSE_TIMEOUT_SECONDS:120}
 
 app:
+  scheduling:
+    enabled: ${APP_SCHEDULING_ENABLED:true}
   v63:
     auth-login-enabled: ${AUTH_LOGIN_V63_ENABLED:true}
     workspace-drop-enabled: ${CHAT_WORKSPACE_DROP_ENABLED:true}

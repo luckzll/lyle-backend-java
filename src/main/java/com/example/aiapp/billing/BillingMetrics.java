@@ -34,42 +34,42 @@ public class BillingMetrics {
         fulfillmentLatency = registry.timer("billing.fulfillment.latency");
     }
 
-    void orderCreated() {
+    public void orderCreated() {
         ordersCreated.increment();
     }
 
-    void orderPaid() {
+    public void orderPaid() {
         ordersPaid.increment();
     }
 
-    void orderFulfilled(Duration latency) {
+    public void orderFulfilled(Duration latency) {
         ordersFulfilled.increment();
         if (latency != null && !latency.isNegative()) {
             fulfillmentLatency.record(latency);
         }
     }
 
-    void invalidCallback() {
+    public void invalidCallback() {
         invalidCallbacks.increment();
     }
 
-    void commercialDebit(long creditMicros) {
+    public void commercialDebit(long creditMicros) {
         commercialDebits.increment(Math.max(0, creditMicros));
     }
 
-    void commercialInsufficient() {
+    public void commercialInsufficient() {
         commercialInsufficient.increment();
     }
 
-    void duplicatePrevented() {
+    public void duplicatePrevented() {
         duplicatePrevented.increment();
     }
 
-    void reconciliationDifferences(long count) {
+    public void reconciliationDifferences(long count) {
         reconciliationDifferences.increment(Math.max(0, count));
     }
 
-    void refundSucceeded() {
+    public void refundSucceeded() {
         refundsSucceeded.increment();
     }
 }

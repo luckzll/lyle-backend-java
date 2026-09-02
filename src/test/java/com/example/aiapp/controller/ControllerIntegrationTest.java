@@ -21,11 +21,25 @@ import com.example.aiapp.domain.vo.UserVO;
 import com.example.aiapp.infrastructure.client.AiServiceClient;
 import com.example.aiapp.mapper.AiConfigMapper;
 import com.example.aiapp.mapper.AuditLogMapper;
+import com.example.aiapp.mapper.BillingPriceVersionMapper;
+import com.example.aiapp.mapper.BillingProductMapper;
+import com.example.aiapp.mapper.BillingOrderMapper;
+import com.example.aiapp.mapper.BillableUsageMapper;
+import com.example.aiapp.mapper.BillingOutboxMapper;
+import com.example.aiapp.mapper.BillingUsagePricingVersionMapper;
 import com.example.aiapp.mapper.ChatMessageMapper;
 import com.example.aiapp.mapper.ChatAttachmentMapper;
 import com.example.aiapp.mapper.ConversationMapper;
 import com.example.aiapp.mapper.KnowledgeBaseMapper;
 import com.example.aiapp.mapper.KnowledgeFileMapper;
+import com.example.aiapp.mapper.RefundOrderMapper;
+import com.example.aiapp.mapper.CommercialAccountMapper;
+import com.example.aiapp.mapper.CommercialLedgerEntryMapper;
+import com.example.aiapp.mapper.CommercialReservationMapper;
+import com.example.aiapp.mapper.EntitlementGrantMapper;
+import com.example.aiapp.mapper.PaymentAttemptMapper;
+import com.example.aiapp.mapper.PaymentReconciliationItemMapper;
+import com.example.aiapp.mapper.PaymentWebhookEventMapper;
 import com.example.aiapp.mapper.UserMapper;
 import com.example.aiapp.security.JwtAuthenticationFilter;
 import com.example.aiapp.security.JwtService;
@@ -177,6 +191,48 @@ class ControllerIntegrationTest {
 
     @MockBean
     AuditLogMapper auditLogMapper;
+
+    @MockBean
+    BillingProductMapper billingProductMapper;
+
+    @MockBean
+    BillingPriceVersionMapper billingPriceVersionMapper;
+
+    @MockBean
+    BillingOrderMapper billingOrderMapper;
+
+    @MockBean
+    RefundOrderMapper refundOrderMapper;
+
+    @MockBean
+    BillingUsagePricingVersionMapper billingUsagePricingVersionMapper;
+
+    @MockBean
+    CommercialAccountMapper commercialAccountMapper;
+
+    @MockBean
+    EntitlementGrantMapper entitlementGrantMapper;
+
+    @MockBean
+    CommercialLedgerEntryMapper commercialLedgerEntryMapper;
+
+    @MockBean
+    CommercialReservationMapper commercialReservationMapper;
+
+    @MockBean
+    BillableUsageMapper billableUsageMapper;
+
+    @MockBean
+    PaymentAttemptMapper paymentAttemptMapper;
+
+    @MockBean
+    PaymentWebhookEventMapper paymentWebhookEventMapper;
+
+    @MockBean
+    BillingOutboxMapper billingOutboxMapper;
+
+    @MockBean
+    PaymentReconciliationItemMapper paymentReconciliationItemMapper;
 
     @MockBean
     ChatMessageMapper chatMessageMapper;
