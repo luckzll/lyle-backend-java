@@ -69,7 +69,7 @@ app:
     jwt-previous-key-id: ${JWT_PREVIOUS_KEY_ID:}
     accept-legacy-jwt: ${AUTH_ACCEPT_LEGACY_JWT:false}
     jwt-ttl-minutes: ${JWT_TTL_MINUTES:15}
-    refresh-ttl-days: ${REFRESH_TOKEN_TTL_DAYS:30}
+    refresh-ttl-days: ${REFRESH_TOKEN_TTL_DAYS:14}
     issuer: ${JWT_ISSUER:lyle-ai}
     audience: ${JWT_AUDIENCE:lyle-web}
     refresh-cookie-name: ${REFRESH_COOKIE_NAME:lyle_refresh}
