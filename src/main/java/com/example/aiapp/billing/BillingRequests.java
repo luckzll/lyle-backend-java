@@ -82,6 +82,7 @@ public final class BillingRequests {
 
     public record Reconcile(
             @NotNull LocalDate date,
+            @Size(max = 32) String provider,
             @NotNull List<ChannelTransaction> transactions
     ) {
     }

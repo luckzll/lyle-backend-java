@@ -4,6 +4,7 @@ import com.example.aiapp.billing.BillingMetrics;
 import com.example.aiapp.billing.BillingProperties;
 import com.example.aiapp.billing.BillingRequests;
 import com.example.aiapp.billing.payment.PaymentGateway;
+import com.example.aiapp.billing.payment.PaymentGatewayRegistry;
 import com.example.aiapp.domain.entity.RefundOrderEntity;
 import com.example.aiapp.mapper.RefundOrderMapper;
 import com.example.aiapp.service.BillingRefundService;
@@ -31,20 +32,20 @@ public class BillingRefundServiceImpl implements BillingRefundService {
     private final RefundOrderMapper refundOrderMapper;
     private final ObjectMapper objectMapper;
     private final BillingProperties properties;
-    private final PaymentGateway paymentGateway;
+    private final PaymentGatewayRegistry paymentGatewayRegistry;
     private final BillingMetrics metrics;
 
     public BillingRefundServiceImpl(
             RefundOrderMapper refundOrderMapper,
             ObjectMapper objectMapper,
             BillingProperties properties,
-            PaymentGateway paymentGateway,
+            PaymentGatewayRegistry paymentGatewayRegistry,
             BillingMetrics metrics
     ) {
         this.refundOrderMapper = refundOrderMapper;
         this.objectMapper = objectMapper;
         this.properties = properties;
-        this.paymentGateway = paymentGateway;
+        this.paymentGatewayRegistry = paymentGatewayRegistry;
         this.metrics = metrics;
     }
 
@@ -64,6 +65,8 @@ public class BillingRefundServiceImpl implements BillingRefundService {
         if (!"PROCESSING".equals(normalize(String.valueOf(refund.get("status"))))) {
             return;
         }
+        Map<String, Object> payment = requirePayment(String.valueOf(refund.get("payment_no")));
+        PaymentGateway paymentGateway = gatewayFor(payment);
         PaymentGateway.RefundResult result = paymentGateway.queryRefund(
                 String.valueOf(refund.get("payment_no")),
                 refundNo
@@ -150,6 +153,7 @@ public class BillingRefundServiceImpl implements BillingRefundService {
     private void executeRefund(String refundNo, boolean approvedConsumed) {
         Map<String, Object> refund = requireRefund(refundNo, true);
         Map<String, Object> payment = requirePayment(String.valueOf(refund.get("payment_no")));
+        PaymentGateway paymentGateway = gatewayFor(payment);
         PaymentGateway.RefundResult result = paymentGateway.createRefund(
                 new PaymentGateway.CreateRefundCommand(
                         refundNo,
@@ -211,6 +215,10 @@ public class BillingRefundServiceImpl implements BillingRefundService {
         );
         refundOrderMapper.markOrderRefunded(number(refund.get("order_id")), now);
         metrics.refundSucceeded();
+    }
+
+    private PaymentGateway gatewayFor(Map<String, Object> payment) {
+        return paymentGatewayRegistry.requireForStoredProvider(String.valueOf(payment.get("provider")));
     }
 
     private Map<String, Object> requireOrder(String orderNo, boolean forUpdate) {

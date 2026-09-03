@@ -2,6 +2,7 @@ package com.example.aiapp.billing;
 
 import com.example.aiapp.billing.payment.PaymentGateway;
 import com.example.aiapp.billing.payment.AlipayProperties;
+import com.example.aiapp.billing.payment.PaymentGatewayRegistry;
 import com.example.aiapp.billing.payment.WechatPayProperties;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -11,7 +12,7 @@ import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 import org.springframework.util.StringUtils;
 
-import java.util.Locale;
+import java.util.List;
 
 @Configuration
 @EnableConfigurationProperties({
@@ -27,7 +28,7 @@ public class BillingConfig {
             BillingProperties properties,
             AlipayProperties alipayProperties,
             WechatPayProperties wechatPayProperties,
-            PaymentGateway gateway
+            PaymentGatewayRegistry gatewayRegistry
     ) {
         return args -> {
             if (!environment.acceptsProfiles(Profiles.of("prod", "production"))) {
@@ -46,19 +47,19 @@ public class BillingConfig {
             if (!properties.checkoutEnabled()) {
                 return;
             }
-            String provider = normalized(properties.paymentProvider());
-            if ("MOCK".equals(provider)) {
-                throw new IllegalStateException("Production PAYMENT_PROVIDER cannot be MOCK.");
+            var providers = gatewayRegistry.enabledProviders();
+            if (providers.isEmpty() || providers.contains("MOCK")) {
+                throw new IllegalStateException("Production PAYMENT_PROVIDER cannot be MOCK or empty.");
             }
-            if (!provider.equals(gateway.provider())) {
-                throw new IllegalStateException(
-                        "The configured production payment provider adapter is not installed."
-                );
+            for (String provider : providers) {
+                PaymentGateway gateway = gatewayRegistry.requireInstalled(provider);
+                if (!provider.equals(gateway.provider())) {
+                    throw new IllegalStateException(
+                            "The configured production payment provider adapter is not installed."
+                    );
+                }
             }
-            if (!StringUtils.hasText(properties.merchantId())) {
-                throw new IllegalStateException("PAYMENT_MERCHANT_ID must be configured.");
-            }
-            if ("ALIPAY".equals(provider)) {
+            if (providers.contains("ALIPAY")) {
                 if (!alipayProperties.sdkConfigured() || !alipayProperties.sellerConfigured()) {
                     throw new IllegalStateException("Alipay SDK and seller settings must be configured.");
                 }
@@ -68,20 +69,24 @@ public class BillingConfig {
                 if (!https(alipayProperties.notifyUrl()) || !https(alipayProperties.returnUrlBase())) {
                     throw new IllegalStateException("Production Alipay notify and return URLs must use HTTPS.");
                 }
-            } else if ("WECHAT_PAY".equals(provider)) {
+            }
+            if (providers.contains("WECHAT_PAY")) {
                 if (!wechatPayProperties.checkoutConfigured()) {
                     throw new IllegalStateException("WeChat Pay API v3 credentials and notify URL must be configured.");
                 }
                 if (wechatPayProperties.publicKeyPartiallyConfigured()) {
                     throw new IllegalStateException("WeChat Pay public key path and public key ID must be configured together.");
                 }
-                if (!properties.merchantId().trim().equals(wechatPayProperties.merchantId().trim())) {
-                    throw new IllegalStateException("PAYMENT_MERCHANT_ID must match WECHAT_PAY_MERCHANT_ID.");
-                }
                 if (!https(wechatPayProperties.notifyUrl())) {
                     throw new IllegalStateException("Production WeChat Pay notify URL must use HTTPS.");
                 }
-            } else {
+            }
+            boolean hasCustomProvider = providers.stream()
+                    .anyMatch(provider -> !"ALIPAY".equals(provider) && !"WECHAT_PAY".equals(provider));
+            if (hasCustomProvider) {
+                if (!StringUtils.hasText(properties.merchantId())) {
+                    throw new IllegalStateException("PAYMENT_MERCHANT_ID must be configured.");
+                }
                 if (!StringUtils.hasText(properties.webhookSecret())
                         || properties.webhookSecret().length() < 32) {
                     throw new IllegalStateException("PAYMENT_WEBHOOK_SECRET must be a strong secret.");
@@ -98,8 +103,20 @@ public class BillingConfig {
         };
     }
 
-    private static String normalized(String value) {
-        return value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+    ApplicationRunner billingProductionValidator(
+            Environment environment,
+            BillingProperties properties,
+            AlipayProperties alipayProperties,
+            WechatPayProperties wechatPayProperties,
+            PaymentGateway gateway
+    ) {
+        return billingProductionValidator(
+                environment,
+                properties,
+                alipayProperties,
+                wechatPayProperties,
+                new PaymentGatewayRegistry(properties, List.of(gateway))
+        );
     }
 
     private static boolean https(String value) {

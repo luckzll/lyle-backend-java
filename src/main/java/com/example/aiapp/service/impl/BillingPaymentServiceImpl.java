@@ -4,6 +4,7 @@ import com.example.aiapp.billing.BillingMetrics;
 import com.example.aiapp.billing.BillingProperties;
 import com.example.aiapp.billing.BillingRequests;
 import com.example.aiapp.billing.payment.PaymentGateway;
+import com.example.aiapp.billing.payment.PaymentGatewayRegistry;
 import com.example.aiapp.billing.payment.WechatPayPaymentGateway;
 import com.example.aiapp.domain.entity.BillingOrderEntity;
 import com.example.aiapp.mapper.BillingOrderMapper;
@@ -48,7 +49,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
     private final BillingOrderMapper billingOrderMapper;
     private final ObjectMapper objectMapper;
     private final BillingProperties properties;
-    private final PaymentGateway paymentGateway;
+    private final PaymentGatewayRegistry paymentGatewayRegistry;
     private final BillingMetrics metrics;
     private final BillingOrderQueryService orderQueryService;
 
@@ -56,14 +57,14 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
             BillingOrderMapper billingOrderMapper,
             ObjectMapper objectMapper,
             BillingProperties properties,
-            PaymentGateway paymentGateway,
+            PaymentGatewayRegistry paymentGatewayRegistry,
             BillingMetrics metrics,
             BillingOrderQueryService orderQueryService
     ) {
         this.billingOrderMapper = billingOrderMapper;
         this.objectMapper = objectMapper;
         this.properties = properties;
-        this.paymentGateway = paymentGateway;
+        this.paymentGatewayRegistry = paymentGatewayRegistry;
         this.metrics = metrics;
         this.orderQueryService = orderQueryService;
     }
@@ -179,6 +180,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
         if (payment == null) {
             return orderResponse(order);
         }
+        PaymentGateway paymentGateway = gatewayFor(payment);
         PaymentGateway.PaymentResult result =
                 paymentGateway.queryPayment(String.valueOf(payment.get("payment_no")));
         String providerStatus = normalize(result.status());
@@ -198,14 +200,9 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
 
     @Override
     @Transactional
-    public Map<String, Object> checkout(long userId, String orderNo) {
+    public Map<String, Object> checkout(long userId, String orderNo, String provider) {
         require(properties.checkoutEnabled() && properties.userViewEnabled());
-        if (!normalize(properties.paymentProvider()).equals(paymentGateway.provider())) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "当前支付渠道尚未配置完成。"
-            );
-        }
+        PaymentGateway selectedGateway = paymentGatewayRegistry.requireEnabled(provider);
         Map<String, Object> order = scopedOrder(userId, safe(orderNo, 64), true);
         String status = normalize(String.valueOf(order.get("status")));
         if (List.of("PAID", "FULFILLING", "FULFILLED", "REFUNDING", "REFUNDED").contains(status)) {
@@ -222,19 +219,46 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
         Map<String, Object> existing = currentPayment(number(order.get("id")));
         if (existing != null
                 && "PENDING".equals(normalize(String.valueOf(existing.get("status"))))
+                && localDateTime(existing.get("expires_at")) != null
                 && localDateTime(existing.get("expires_at")).isAfter(LocalDateTime.now())) {
-            PaymentGateway.CheckoutResult restored = paymentGateway.createPayment(
-                    createPaymentCommand(
-                            order,
-                            String.valueOf(existing.get("payment_no")),
-                            localDateTime(existing.get("expires_at"))
-                    )
+            PaymentGateway existingGateway = gatewayFor(existing);
+            if (existingGateway.provider().equals(selectedGateway.provider())) {
+                PaymentGateway.CheckoutResult restored = selectedGateway.createPayment(
+                        createPaymentCommand(
+                                order,
+                                String.valueOf(existing.get("payment_no")),
+                                localDateTime(existing.get("expires_at"))
+                        )
+                );
+                return checkoutResponse(order, existing, restored);
+            }
+            PaymentGateway.PaymentResult existingResult = existingGateway.queryPayment(
+                    String.valueOf(existing.get("payment_no"))
             );
-            return checkoutResponse(order, existing, restored);
+            String existingStatus = normalize(existingResult.status());
+            if ("SUCCEEDED".equals(existingStatus)) {
+                confirmPaymentInternal(
+                        String.valueOf(existing.get("payment_no")),
+                        existingResult.providerTransactionId(),
+                        number(existing.get("amount_minor")),
+                        String.valueOf(existing.get("currency")),
+                        existingGateway.provider()
+                );
+                order.put("status", "PAID");
+                return checkoutResponse(order, existing, null);
+            }
+            if ("PENDING".equals(existingStatus)) {
+                existingResult = existingGateway.closePayment(String.valueOf(existing.get("payment_no")));
+                existingStatus = normalize(existingResult.status());
+            }
+            if (!"CLOSED".equals(existingStatus)) {
+                throw conflict("原支付渠道暂未确认关单，请稍后再切换支付方式。");
+            }
+            billingOrderMapper.markPaymentClosed(number(existing.get("id")), LocalDateTime.now());
         }
 
         String paymentNo = businessNo("P");
-        PaymentGateway.CheckoutResult result = paymentGateway.createPayment(
+        PaymentGateway.CheckoutResult result = selectedGateway.createPayment(
                 createPaymentCommand(order, paymentNo, orderExpiresAt)
         );
         LocalDateTime now = LocalDateTime.now();
@@ -263,6 +287,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
         }
         Map<String, Object> payment = currentPayment(number(order.get("id")));
         if (payment != null) {
+            PaymentGateway paymentGateway = gatewayFor(payment);
             PaymentGateway.PaymentResult result =
                     paymentGateway.queryPayment(String.valueOf(payment.get("payment_no")));
             if ("SUCCEEDED".equals(normalize(result.status()))) {
@@ -271,7 +296,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
                         result.providerTransactionId(),
                         number(payment.get("amount_minor")),
                         String.valueOf(payment.get("currency")),
-                        paymentGateway.provider()
+                        String.valueOf(payment.get("provider"))
                 );
                 return orderQueryService.getOrder(userId, orderNo);
             }
@@ -311,7 +336,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
     @Override
     @Transactional
     public Map<String, Object> confirmMockPayment(String paymentNo) {
-        if (!"MOCK".equals(paymentGateway.provider())) {
+        if (!paymentGatewayRegistry.isEnabled("MOCK")) {
             throw badRequest("当前环境不是沙箱支付。");
         }
         Map<String, Object> payment = requirePayment(paymentNo, true);
@@ -320,7 +345,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
                 "mock-" + UUID.randomUUID(),
                 number(payment.get("amount_minor")),
                 String.valueOf(payment.get("currency")),
-                paymentGateway.provider()
+                "MOCK"
         );
         return paymentStatus(paymentNo);
     }
@@ -401,8 +426,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
         require(properties.webhookEnabled());
         String normalizedProvider = normalize(provider);
         String payloadHash = sha256(rawBody);
-        if (!normalizedProvider.equals(normalize(properties.paymentProvider()))
-                || !verifyHmac(rawBody, signature)) {
+        if (!paymentGatewayRegistry.isEnabled(normalizedProvider) || !verifyHmac(rawBody, signature)) {
             metrics.invalidCallback();
             recordWebhook(
                     normalizedProvider,
@@ -472,8 +496,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
     @Transactional(noRollbackFor = ResponseStatusException.class)
     public boolean processAlipayNotification(Map<String, String> parameters) {
         require(properties.webhookEnabled());
-        if (!"ALIPAY".equals(normalize(properties.paymentProvider()))
-                || !"ALIPAY".equals(paymentGateway.provider())) {
+        if (!paymentGatewayRegistry.isEnabled("ALIPAY")) {
             throw badRequest("当前环境未启用支付宝通知。");
         }
         String eventId = requiredNotificationField(parameters, "notify_id", 128);
@@ -530,8 +553,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
             WechatPayPaymentGateway.VerifiedPaymentNotification notification
     ) {
         require(properties.webhookEnabled());
-        if (!"WECHAT_PAY".equals(normalize(properties.paymentProvider()))
-                || !"WECHAT_PAY".equals(paymentGateway.provider())) {
+        if (!paymentGatewayRegistry.isEnabled("WECHAT_PAY")) {
             throw badRequest("当前环境未启用微信支付通知。");
         }
         Map<String, Object> payment = requirePayment(notification.paymentNo(), true);
@@ -608,6 +630,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
         }
         Map<String, Object> payment = currentPayment(number(order.get("id")));
         if (payment != null) {
+            PaymentGateway paymentGateway = gatewayFor(payment);
             PaymentGateway.PaymentResult result =
                     paymentGateway.queryPayment(String.valueOf(payment.get("payment_no")));
             if ("SUCCEEDED".equals(normalize(result.status()))) {
@@ -719,17 +742,27 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
             Map<String, Object> payment,
             PaymentGateway.CheckoutResult checkout
     ) {
+        String responseProvider = checkout != null
+                ? checkout.provider()
+                : payment == null
+                ? paymentGatewayRegistry.defaultProvider()
+                : String.valueOf(payment.get("provider"));
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("orderNo", order.get("order_no"));
         response.put("orderStatus", order.get("status"));
         response.put("paymentNo", payment == null ? null : payment.get("payment_no"));
         response.put("paymentStatus", payment == null ? null : payment.get("status"));
-        response.put("provider", payment == null ? paymentGateway.provider() : payment.get("provider"));
+        response.put("provider", responseProvider);
         response.put("checkoutType", checkout == null ? "RESTORE" : checkout.checkoutType());
         response.put("action", checkout == null ? null : checkout.action());
         response.put("expiresAt", payment == null ? order.get("expires_at") : payment.get("expires_at"));
-        response.put("sandbox", "MOCK".equals(paymentGateway.provider()));
+        response.put("sandbox", "MOCK".equals(responseProvider));
+        response.put("availableProviders", paymentGatewayRegistry.enabledProviders());
         return response;
+    }
+
+    private PaymentGateway gatewayFor(Map<String, Object> payment) {
+        return paymentGatewayRegistry.requireForStoredProvider(String.valueOf(payment.get("provider")));
     }
 
     private PaymentGateway.CreatePaymentCommand createPaymentCommand(
@@ -749,8 +782,13 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
 
     private void markPaymentAndOrderClosed(Map<String, Object> payment) {
         LocalDateTime now = LocalDateTime.now();
-        billingOrderMapper.markPaymentClosed(number(payment.get("id")), now);
-        billingOrderMapper.markOrderClosed(number(payment.get("order_id")), now);
+        long paymentId = number(payment.get("id"));
+        long orderId = number(payment.get("order_id"));
+        billingOrderMapper.markPaymentClosed(paymentId, now);
+        Map<String, Object> latestPayment = currentPayment(orderId);
+        if (latestPayment != null && number(latestPayment.get("id")) == paymentId) {
+            billingOrderMapper.markOrderClosed(orderId, now);
+        }
     }
 
     private Map<String, Object> orderResponse(Map<String, Object> row) {

@@ -1,12 +1,10 @@
 package com.example.aiapp.billing.payment;
 
 import org.springframework.stereotype.Component;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.util.UUID;
 
 @Component
-@ConditionalOnProperty(prefix = "app.billing", name = "payment-provider", havingValue = "MOCK", matchIfMissing = true)
 public class MockPaymentGateway implements PaymentGateway {
 
     @Override

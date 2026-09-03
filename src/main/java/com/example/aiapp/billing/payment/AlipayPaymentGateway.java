@@ -20,7 +20,6 @@ import com.alipay.api.response.AlipayTradeFastpayRefundQueryResponse;
 import com.alipay.api.response.AlipayTradePagePayResponse;
 import com.alipay.api.response.AlipayTradeQueryResponse;
 import com.alipay.api.response.AlipayTradeRefundResponse;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -36,7 +35,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.Map;
 
 @Component
-@ConditionalOnProperty(prefix = "app.billing", name = "payment-provider", havingValue = "ALIPAY")
 public class AlipayPaymentGateway implements PaymentGateway {
 
     private static final DateTimeFormatter ALIPAY_TIME =
