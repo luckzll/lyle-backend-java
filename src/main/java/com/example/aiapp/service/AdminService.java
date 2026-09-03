@@ -9,6 +9,9 @@ import com.example.aiapp.domain.vo.PageVO;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 管理后台业务服务。
+ */
 public interface AdminService {
 
     AdminOverviewVO overview();

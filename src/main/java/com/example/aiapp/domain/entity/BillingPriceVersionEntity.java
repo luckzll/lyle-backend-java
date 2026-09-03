@@ -4,9 +4,14 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
 
 import java.time.LocalDateTime;
 
+/**
+ * 商品价格版本实体，对应 billing_price_version 表。
+ */
+@Data
 @TableName("billing_price_version")
 public class BillingPriceVersionEntity {
 
@@ -49,116 +54,4 @@ public class BillingPriceVersionEntity {
 
     @TableField("published_at")
     private LocalDateTime publishedAt;
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public Long getProductId() {
-        return productId;
-    }
-
-    public void setProductId(Long productId) {
-        this.productId = productId;
-    }
-
-    public String getVersionCode() {
-        return versionCode;
-    }
-
-    public void setVersionCode(String versionCode) {
-        this.versionCode = versionCode;
-    }
-
-    public String getCurrency() {
-        return currency;
-    }
-
-    public void setCurrency(String currency) {
-        this.currency = currency;
-    }
-
-    public Long getAmountMinor() {
-        return amountMinor;
-    }
-
-    public void setAmountMinor(Long amountMinor) {
-        this.amountMinor = amountMinor;
-    }
-
-    public Long getIncludedCreditMicros() {
-        return includedCreditMicros;
-    }
-
-    public void setIncludedCreditMicros(Long includedCreditMicros) {
-        this.includedCreditMicros = includedCreditMicros;
-    }
-
-    public Integer getValidityDays() {
-        return validityDays;
-    }
-
-    public void setValidityDays(Integer validityDays) {
-        this.validityDays = validityDays;
-    }
-
-    public String getEntitlementSnapshot() {
-        return entitlementSnapshot;
-    }
-
-    public void setEntitlementSnapshot(String entitlementSnapshot) {
-        this.entitlementSnapshot = entitlementSnapshot;
-    }
-
-    public String getPricingRuleSnapshot() {
-        return pricingRuleSnapshot;
-    }
-
-    public void setPricingRuleSnapshot(String pricingRuleSnapshot) {
-        this.pricingRuleSnapshot = pricingRuleSnapshot;
-    }
-
-    public String getStatus() {
-        return status;
-    }
-
-    public void setStatus(String status) {
-        this.status = status;
-    }
-
-    public LocalDateTime getSellFrom() {
-        return sellFrom;
-    }
-
-    public void setSellFrom(LocalDateTime sellFrom) {
-        this.sellFrom = sellFrom;
-    }
-
-    public LocalDateTime getSellUntil() {
-        return sellUntil;
-    }
-
-    public void setSellUntil(LocalDateTime sellUntil) {
-        this.sellUntil = sellUntil;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public LocalDateTime getPublishedAt() {
-        return publishedAt;
-    }
-
-    public void setPublishedAt(LocalDateTime publishedAt) {
-        this.publishedAt = publishedAt;
-    }
 }

@@ -14,6 +14,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 项目管理接口。
+ */
 @RestController
 @RequestMapping("/projects")
 public class ProjectController {

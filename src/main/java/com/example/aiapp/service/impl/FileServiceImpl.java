@@ -1,6 +1,6 @@
 package com.example.aiapp.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.aiapp.domain.dto.AiIngestRequestDTO;
 import com.example.aiapp.domain.dto.AiIngestResponseDTO;
@@ -29,6 +29,9 @@ import java.util.UUID;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
+/**
+ * 知识库文件服务实现。
+ */
 @Service
 public class FileServiceImpl implements FileService {
 
@@ -115,11 +118,9 @@ public class FileServiceImpl implements FileService {
     @Override
     public PageVO<KnowledgeFileVO> pageByKnowledgeBaseId(Long userId, Long knowledgeBaseId, long page, long size) {
         ensureKnowledgeBaseOwnedByUser(userId, knowledgeBaseId);
-        Page<KnowledgeFileEntity> result = knowledgeFileMapper.selectPage(
+        IPage<KnowledgeFileEntity> result = knowledgeFileMapper.selectPageByKnowledgeBaseId(
                 Page.of(page, size),
-                new LambdaQueryWrapper<KnowledgeFileEntity>()
-                        .eq(KnowledgeFileEntity::getKnowledgeBaseId, knowledgeBaseId)
-                        .orderByDesc(KnowledgeFileEntity::getCreatedAt)
+                knowledgeBaseId
         );
         return new PageVO<>(
                 result.getRecords().stream().map(this::toVO).toList(),

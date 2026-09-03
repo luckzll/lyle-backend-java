@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.BillingOutboxMapper">
+
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.BillingOutboxEntity">
+        <id column="id" property="id"/>
+        <result column="aggregate_type" property="aggregateType"/>
+        <result column="aggregate_id" property="aggregateId"/>
+        <result column="event_type" property="eventType"/>
+        <result column="event_version" property="eventVersion"/>
+        <result column="payload_json" property="payloadJson"/>
+        <result column="status" property="status"/>
+        <result column="retry_count" property="retryCount"/>
+        <result column="next_attempt_at" property="nextAttemptAt"/>
+        <result column="last_error" property="lastError"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="processed_at" property="processedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, aggregate_type, aggregate_id, event_type, event_version, payload_json, status, retry_count, next_attempt_at, last_error, created_at, processed_at
+    </sql>
+
+    <!-- MyBatis-Plus 通用 CRUD 由 BaseMapper 提供；自定义 SQL 在此文件扩展。 -->
+
+</mapper>

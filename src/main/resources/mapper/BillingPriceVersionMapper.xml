@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.BillingPriceVersionMapper">
+
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.BillingPriceVersionEntity">
+        <id column="id" property="id"/>
+        <result column="product_id" property="productId"/>
+        <result column="version_code" property="versionCode"/>
+        <result column="currency" property="currency"/>
+        <result column="amount_minor" property="amountMinor"/>
+        <result column="included_credit_micros" property="includedCreditMicros"/>
+        <result column="validity_days" property="validityDays"/>
+        <result column="entitlement_snapshot" property="entitlementSnapshot"/>
+        <result column="pricing_rule_snapshot" property="pricingRuleSnapshot"/>
+        <result column="status" property="status"/>
+        <result column="sell_from" property="sellFrom"/>
+        <result column="sell_until" property="sellUntil"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="published_at" property="publishedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, product_id, version_code, currency, amount_minor, included_credit_micros,
+        validity_days, entitlement_snapshot, pricing_rule_snapshot, status,
+        sell_from, sell_until, created_at, published_at
+    </sql>
+
+    <!-- 查询当前可售的已发布商品价格目录 -->
+    <select id="selectPublishedCatalog"
+            resultType="com.example.aiapp.domain.vo.BillingCatalogRowVO">
+        SELECT
+            p.product_code,
+            p.product_type,
+            p.display_name,
+            p.description,
+            v.version_code,
+            v.currency,
+            v.amount_minor,
+            v.included_credit_micros,
+            v.validity_days,
+            v.entitlement_snapshot,
+            v.sell_until
+        FROM billing_product p
+        JOIN billing_price_version v ON v.product_id = p.id
+        WHERE p.status = 'ACTIVE'
+          AND v.status = 'PUBLISHED'
+          AND (v.sell_from IS NULL OR v.sell_from &lt;= CURRENT_TIMESTAMP(6))
+          AND (v.sell_until IS NULL OR v.sell_until &gt; CURRENT_TIMESTAMP(6))
+        ORDER BY
+            CASE p.product_type
+                WHEN 'PLAN' THEN 1
+                WHEN 'CREDIT_PACK' THEN 2
+                ELSE 3
+            END,
+            v.amount_minor
+    </select>
+
+    <select id="selectByVersionCode" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM billing_price_version
+        WHERE version_code = #{versionCode}
+        LIMIT 1
+    </select>
+
+    <!-- 通过状态条件实现乐观并发控制，只允许发布草稿。 -->
+    <update id="publishDraft">
+        UPDATE billing_price_version
+        SET status = 'PUBLISHED',
+            published_at = #{publishedAt}
+        WHERE id = #{id}
+          AND status = 'DRAFT'
+    </update>
+
+</mapper>

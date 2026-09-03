@@ -18,6 +18,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 管理后台接口。
+ */
 @RestController
 @RequestMapping("/admin")
 public class AdminController {

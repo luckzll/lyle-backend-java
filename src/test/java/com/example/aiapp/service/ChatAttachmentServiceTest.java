@@ -4,6 +4,7 @@ import com.example.aiapp.domain.entity.ChatAttachmentEntity;
 import com.example.aiapp.infrastructure.storage.FileStorageService;
 import com.example.aiapp.infrastructure.storage.StoredObject;
 import com.example.aiapp.mapper.ChatAttachmentMapper;
+import com.example.aiapp.service.impl.ChatAttachmentServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
@@ -30,7 +31,7 @@ class ChatAttachmentServiceTest {
     void setUp() {
         mapper = mock(ChatAttachmentMapper.class);
         storage = mock(FileStorageService.class);
-        service = new ChatAttachmentService(mapper, storage);
+        service = new ChatAttachmentServiceImpl(mapper, storage);
     }
 
     @Test
@@ -77,7 +78,7 @@ class ChatAttachmentServiceTest {
     void readyAttachmentsPreserveRequestedOrder() {
         ChatAttachmentEntity first = ready("first", 10L);
         ChatAttachmentEntity second = ready("second", 20L);
-        when(mapper.selectList(any())).thenReturn(List.of(first, second));
+        when(mapper.selectByUserIdAndIds(anyLong(), any())).thenReturn(List.of(first, second));
 
         var result = service.requireReady(42L, List.of("second", "first"));
 
@@ -88,7 +89,7 @@ class ChatAttachmentServiceTest {
     void retryRequiresEveryOriginalAttachmentInOriginalOrder() {
         ChatAttachmentEntity first = attached("first", 10L, 0);
         ChatAttachmentEntity second = attached("second", 20L, 1);
-        when(mapper.selectList(any())).thenReturn(List.of(first, second));
+        when(mapper.selectAttachedForRetry(anyLong(), anyLong(), anyLong())).thenReturn(List.of(first, second));
 
         assertThatThrownBy(() -> service.requireAttachedForRetry(
                 42L,

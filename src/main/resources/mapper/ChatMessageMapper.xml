@@ -3,29 +3,31 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.example.aiapp.mapper.ChatMessageMapper">
 
-    <select id="selectByConversationId" resultType="com.example.aiapp.domain.entity.ChatMessageEntity">
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.ChatMessageEntity">
+        <id column="id" property="id"/>
+        <result column="conversation_id" property="conversationId"/>
+        <result column="turn_id" property="turnId"/>
+        <result column="role" property="role"/>
+        <result column="content" property="content"/>
+        <result column="metadata_json" property="metadataJson"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, conversation_id, turn_id, role, content, metadata_json, created_at
+    </sql>
+
+    <select id="selectByConversationId" resultMap="BaseResultMap">
         SELECT
-            id,
-            conversation_id,
-            turn_id,
-            role,
-            content,
-            metadata_json,
-            created_at
+            <include refid="Base_Column_List"/>
         FROM chat_message
         WHERE conversation_id = #{conversationId}
         ORDER BY created_at ASC
     </select>
 
-    <select id="selectByConversationIdAndTurnId" resultType="com.example.aiapp.domain.entity.ChatMessageEntity">
+    <select id="selectByConversationIdAndTurnId" resultMap="BaseResultMap">
         SELECT
-            id,
-            conversation_id,
-            turn_id,
-            role,
-            content,
-            metadata_json,
-            created_at
+            <include refid="Base_Column_List"/>
         FROM chat_message
         WHERE conversation_id = #{conversationId}
           AND turn_id = #{turnId}
@@ -34,15 +36,9 @@
         LIMIT 1
     </select>
 
-    <select id="selectUserByConversationIdAndTurnId" resultType="com.example.aiapp.domain.entity.ChatMessageEntity">
+    <select id="selectUserByConversationIdAndTurnId" resultMap="BaseResultMap">
         SELECT
-            id,
-            conversation_id,
-            turn_id,
-            role,
-            content,
-            metadata_json,
-            created_at
+            <include refid="Base_Column_List"/>
         FROM chat_message
         WHERE conversation_id = #{conversationId}
           AND turn_id = #{turnId}

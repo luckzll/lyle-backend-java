@@ -6,6 +6,9 @@ import com.example.aiapp.usage.UsageEventRequest;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 商业账户与额度服务。
+ */
 public interface BillingAccountService {
 
     Map<String, Object> account(long userId);

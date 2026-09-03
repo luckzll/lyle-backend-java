@@ -14,6 +14,9 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 
+/**
+ * 认证安全事件记录服务。
+ */
 @Service
 public class AuthSecurityEventService {
 

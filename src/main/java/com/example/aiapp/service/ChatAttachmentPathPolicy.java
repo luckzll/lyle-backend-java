@@ -9,6 +9,9 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+/**
+ * 对话附件路径规则。
+ */
 public final class ChatAttachmentPathPolicy {
 
     private static final int MAX_PATH_LENGTH = 512;

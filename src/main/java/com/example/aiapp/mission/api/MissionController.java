@@ -19,6 +19,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 智能体任务使命及其触发器管理接口。
+ */
 @RestController
 @RequestMapping("/missions")
 public class MissionController {

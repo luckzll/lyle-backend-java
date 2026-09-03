@@ -4,10 +4,11 @@ import com.example.aiapp.billing.BillingMetrics;
 import com.example.aiapp.billing.BillingProperties;
 import com.example.aiapp.billing.BillingRequests;
 import com.example.aiapp.billing.payment.PaymentGateway;
+import com.example.aiapp.domain.entity.RefundOrderEntity;
+import com.example.aiapp.mapper.RefundOrderMapper;
 import com.example.aiapp.service.BillingRefundService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -21,23 +22,26 @@ import java.util.Map;
 import static com.example.aiapp.billing.support.BillingIdentifiers.businessNo;
 import static com.example.aiapp.billing.support.BillingIdentifiers.nextId;
 
+/**
+ * 退款申请与处理服务实现。
+ */
 @Service
 public class BillingRefundServiceImpl implements BillingRefundService {
 
-    private final JdbcTemplate jdbcTemplate;
+    private final RefundOrderMapper refundOrderMapper;
     private final ObjectMapper objectMapper;
     private final BillingProperties properties;
     private final PaymentGateway paymentGateway;
     private final BillingMetrics metrics;
 
     public BillingRefundServiceImpl(
-            JdbcTemplate jdbcTemplate,
+            RefundOrderMapper refundOrderMapper,
             ObjectMapper objectMapper,
             BillingProperties properties,
             PaymentGateway paymentGateway,
             BillingMetrics metrics
     ) {
-        this.jdbcTemplate = jdbcTemplate;
+        this.refundOrderMapper = refundOrderMapper;
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.paymentGateway = paymentGateway;
@@ -50,18 +54,7 @@ public class BillingRefundServiceImpl implements BillingRefundService {
         if (!properties.checkoutEnabled()) {
             return List.of();
         }
-        return jdbcTemplate.query(
-                """
-                SELECT refund_no
-                FROM refund_order
-                WHERE status = 'PROCESSING'
-                  AND updated_at <= DATE_SUB(CURRENT_TIMESTAMP(6), INTERVAL 10 SECOND)
-                ORDER BY updated_at
-                LIMIT ?
-                """,
-                (resultSet, rowNum) -> resultSet.getString(1),
-                Math.max(1, Math.min(limit, 100))
-        );
+        return refundOrderMapper.selectPendingRefundNumbers(Math.max(1, Math.min(limit, 100)));
     }
 
     @Override
@@ -78,11 +71,7 @@ public class BillingRefundServiceImpl implements BillingRefundService {
         if ("SUCCEEDED".equals(normalize(result.status()))) {
             completeRefund(refundNo, false, refund, result);
         } else {
-            jdbcTemplate.update(
-                    "UPDATE refund_order SET updated_at = ? WHERE id = ?",
-                    LocalDateTime.now(),
-                    refund.get("id")
-            );
+            refundOrderMapper.touchRefund(number(refund.get("id")), LocalDateTime.now());
         }
     }
 
@@ -96,14 +85,13 @@ public class BillingRefundServiceImpl implements BillingRefundService {
         String normalizedOrderNo = safe(orderNo, 64);
         String requestId = safe(request.requestId(), 128);
         Map<String, Object> order = requireOrder(normalizedOrderNo, true);
-        List<Map<String, Object>> existing = jdbcTemplate.queryForList(
-                "SELECT refund_no FROM refund_order WHERE order_id = ? AND request_id = ?",
-                order.get("id"),
+        String existingRefundNo = refundOrderMapper.selectRefundNoByOrderIdAndRequestId(
+                number(order.get("id")),
                 requestId
         );
-        if (!existing.isEmpty()) {
+        if (existingRefundNo != null) {
             metrics.duplicatePrevented();
-            return requireRefund(String.valueOf(existing.get(0).get("refund_no")), false);
+            return requireRefund(existingRefundNo, false);
         }
         if (!"FULFILLED".equals(normalize(String.valueOf(order.get("status"))))) {
             throw conflict("只有已完成订单可以发起退款。");
@@ -112,56 +100,32 @@ public class BillingRefundServiceImpl implements BillingRefundService {
         if (payment == null || !"SUCCEEDED".equals(normalize(String.valueOf(payment.get("status"))))) {
             throw conflict("订单没有已确认的支付单。");
         }
-        long refundable = number(order.get("paid_amount_minor")) - aggregateLong(
-                """
-                SELECT COALESCE(SUM(amount_minor), 0)
-                FROM refund_order
-                WHERE order_id = ? AND status IN ('PROCESSING', 'SUCCEEDED')
-                """,
-                order.get("id")
-        );
+        long refundable = number(order.get("paid_amount_minor"))
+                - refundOrderMapper.sumActiveRefundAmount(number(order.get("id")));
         if (refundable <= 0) {
             throw conflict("订单已无可退款金额。");
         }
-        boolean consumed = aggregateLong(
-                """
-                SELECT COALESCE(SUM(quantity_micros - remaining_micros), 0)
-                FROM entitlement_grant
-                WHERE source_type = 'ORDER' AND source_id = ?
-                """,
-                normalizedOrderNo
-        ) > 0;
+        boolean consumed = refundOrderMapper.sumConsumedGrantByOrderNo(normalizedOrderNo) > 0;
         String status = consumed ? "REVIEW_REQUIRED" : "PROCESSING";
         String refundNo = businessNo("R");
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                INSERT INTO refund_order (
-                    id, refund_no, request_id, order_id, payment_attempt_id,
-                    user_id, status, currency, amount_minor, reason_code, reason_note,
-                    requested_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                nextId(),
-                refundNo,
-                requestId,
-                order.get("id"),
-                payment.get("id"),
-                order.get("user_id"),
-                status,
-                order.get("currency"),
-                refundable,
-                normalizeCode(request.reasonCode(), 64),
-                safeNullable(request.reasonNote(), 512),
-                operatorUserId,
-                now,
-                now
-        );
-        jdbcTemplate.update(
-                "UPDATE billing_order SET status = 'REFUNDING', updated_at = ? WHERE id = ?",
-                now,
-                order.get("id")
-        );
+        RefundOrderEntity refund = new RefundOrderEntity();
+        refund.setId(nextId());
+        refund.setRefundNo(refundNo);
+        refund.setRequestId(requestId);
+        refund.setOrderId(number(order.get("id")));
+        refund.setPaymentAttemptId(number(payment.get("id")));
+        refund.setUserId(number(order.get("user_id")));
+        refund.setStatus(status);
+        refund.setCurrency(String.valueOf(order.get("currency")));
+        refund.setAmountMinor(refundable);
+        refund.setReasonCode(normalizeCode(request.reasonCode(), 64));
+        refund.setReasonNote(safeNullable(request.reasonNote(), 512));
+        refund.setRequestedBy(operatorUserId);
+        refund.setCreatedAt(now);
+        refund.setUpdatedAt(now);
+        refundOrderMapper.insert(refund);
+        refundOrderMapper.markOrderRefunding(number(order.get("id")), now);
         if (!consumed) {
             executeRefund(refundNo, false);
         }
@@ -178,11 +142,7 @@ public class BillingRefundServiceImpl implements BillingRefundService {
         if (!"REVIEW_REQUIRED".equals(normalize(String.valueOf(refund.get("status"))))) {
             throw conflict("退款单当前不需要人工审批。");
         }
-        jdbcTemplate.update(
-                "UPDATE refund_order SET status = 'PROCESSING', updated_at = ? WHERE id = ?",
-                LocalDateTime.now(),
-                refund.get("id")
-        );
+        refundOrderMapper.markRefundProcessing(number(refund.get("id")), LocalDateTime.now());
         executeRefund(refundNo, true);
         return requireRefund(refundNo, false);
     }
@@ -201,19 +161,11 @@ public class BillingRefundServiceImpl implements BillingRefundService {
                 )
         );
         if ("PENDING".equals(normalize(result.status()))) {
-            jdbcTemplate.update(
-                    "UPDATE refund_order SET status = 'PROCESSING', updated_at = ? WHERE id = ?",
-                    LocalDateTime.now(),
-                    refund.get("id")
-            );
+            refundOrderMapper.markRefundProcessing(number(refund.get("id")), LocalDateTime.now());
             return;
         }
         if (!"SUCCEEDED".equals(normalize(result.status()))) {
-            jdbcTemplate.update(
-                    "UPDATE refund_order SET status = 'FAILED', updated_at = ? WHERE id = ?",
-                    LocalDateTime.now(),
-                    refund.get("id")
-            );
+            refundOrderMapper.markRefundFailed(number(refund.get("id")), LocalDateTime.now());
             return;
         }
         completeRefund(refundNo, approvedConsumed, refund, result);
@@ -226,151 +178,71 @@ public class BillingRefundServiceImpl implements BillingRefundService {
             PaymentGateway.RefundResult result
     ) {
         String orderNo = String.valueOf(refund.get("order_no"));
-        List<Map<String, Object>> grants = jdbcTemplate.queryForList(
-                """
-                SELECT *
-                FROM entitlement_grant
-                WHERE source_type = 'ORDER' AND source_id = ?
-                FOR UPDATE
-                """,
-                orderNo
-        );
+        List<Map<String, Object>> grants = refundOrderMapper.selectOrderGrantsForUpdate(orderNo);
         for (Map<String, Object> grant : grants) {
             long remaining = number(grant.get("remaining_micros"));
             if (remaining > 0) {
-                jdbcTemplate.update(
-                        """
-                        UPDATE entitlement_grant
-                        SET remaining_micros = 0, status = 'REVOKED', updated_at = ?
-                        WHERE id = ?
-                        """,
-                        LocalDateTime.now(),
-                        grant.get("id")
-                );
+                refundOrderMapper.revokeGrantAndClear(number(grant.get("id")), LocalDateTime.now());
                 long accountId = number(grant.get("account_id"));
-                jdbcTemplate.update(
-                        """
-                        INSERT IGNORE INTO commercial_ledger_entry (
-                            id, account_id, grant_id, entry_type, direction,
-                            credit_micros, balance_after_micros, source_type, source_id,
-                            idempotency_key, occurred_at, expires_at, metadata_json, created_at
-                        ) VALUES (?, ?, ?, 'REFUND_REVERSAL', 'DEBIT', ?, ?, 'REFUND', ?, ?, ?, ?, ?, ?)
-                        """,
+                LocalDateTime occurredAt = LocalDateTime.now();
+                refundOrderMapper.insertRefundReversal(
                         nextId(),
                         accountId,
-                        grant.get("id"),
+                        number(grant.get("id")),
                         remaining,
                         availableCredits(accountId),
                         refundNo,
                         safe("REFUND_REVERSAL:" + refundNo + ":" + grant.get("id"), 128),
-                        LocalDateTime.now(),
+                        occurredAt,
                         grant.get("expires_at"),
                         json(Map.of("consumedApproved", approvedConsumed)),
                         LocalDateTime.now()
                 );
             } else {
-                jdbcTemplate.update(
-                        "UPDATE entitlement_grant SET status = 'REVOKED', updated_at = ? WHERE id = ?",
-                        LocalDateTime.now(),
-                        grant.get("id")
-                );
+                refundOrderMapper.revokeGrant(number(grant.get("id")), LocalDateTime.now());
             }
         }
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                UPDATE refund_order
-                SET status = 'SUCCEEDED', provider_refund_id = ?, succeeded_at = ?, updated_at = ?
-                WHERE id = ?
-                """,
+        refundOrderMapper.markRefundSucceeded(
+                number(refund.get("id")),
                 result.providerRefundId(),
                 now,
-                now,
-                refund.get("id")
+                now
         );
-        jdbcTemplate.update(
-                "UPDATE billing_order SET status = 'REFUNDED', updated_at = ? WHERE id = ?",
-                now,
-                refund.get("order_id")
-        );
+        refundOrderMapper.markOrderRefunded(number(refund.get("order_id")), now);
         metrics.refundSucceeded();
     }
 
     private Map<String, Object> requireOrder(String orderNo, boolean forUpdate) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT * FROM billing_order WHERE order_no = ?" + (forUpdate ? " FOR UPDATE" : ""),
-                safe(orderNo, 64)
-        );
-        if (rows.isEmpty()) {
+        Map<String, Object> order = refundOrderMapper.selectOrderByOrderNo(safe(orderNo, 64), forUpdate);
+        if (order == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
-        return rows.get(0);
+        return order;
     }
 
     private Map<String, Object> requirePayment(String paymentNo) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                """
-                SELECT p.*, o.order_no, o.status AS order_status, o.user_id, o.account_id
-                FROM payment_attempt p
-                JOIN billing_order o ON o.id = p.order_id
-                WHERE p.payment_no = ?
-                """,
-                safe(paymentNo, 64)
-        );
-        if (rows.isEmpty()) {
+        Map<String, Object> payment = refundOrderMapper.selectPaymentByPaymentNo(safe(paymentNo, 64));
+        if (payment == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
-        return rows.get(0);
+        return payment;
     }
 
     private Map<String, Object> requireRefund(String refundNo, boolean forUpdate) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                """
-                SELECT r.*, o.order_no, p.payment_no
-                FROM refund_order r
-                JOIN billing_order o ON o.id = r.order_id
-                JOIN payment_attempt p ON p.id = r.payment_attempt_id
-                WHERE r.refund_no = ?
-                """ + (forUpdate ? " FOR UPDATE" : ""),
-                safe(refundNo, 64)
-        );
-        if (rows.isEmpty()) {
+        Map<String, Object> refund = refundOrderMapper.selectRefundByRefundNo(safe(refundNo, 64), forUpdate);
+        if (refund == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
-        return rows.get(0);
+        return refund;
     }
 
     private Map<String, Object> currentPayment(long orderId) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                """
-                SELECT *
-                FROM payment_attempt
-                WHERE order_id = ?
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-                """,
-                orderId
-        );
-        return rows.isEmpty() ? null : rows.get(0);
+        return refundOrderMapper.selectLatestPaymentByOrderId(orderId);
     }
 
     private long availableCredits(long accountId) {
-        return aggregateLong(
-                """
-                SELECT COALESCE(SUM(remaining_micros), 0)
-                FROM entitlement_grant
-                WHERE account_id = ? AND status = 'ACTIVE'
-                  AND remaining_micros > 0
-                  AND valid_from <= CURRENT_TIMESTAMP(6)
-                  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(6))
-                """,
-                accountId
-        );
-    }
-
-    private long aggregateLong(String sql, Object... arguments) {
-        Long result = jdbcTemplate.queryForObject(sql, Long.class, arguments);
-        return result == null ? 0 : result;
+        return refundOrderMapper.sumAvailableCredits(accountId);
     }
 
     private String json(Object value) {

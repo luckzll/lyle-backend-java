@@ -10,6 +10,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+/**
+ * 通用文件上传接口。
+ */
 @RestController
 @RequestMapping("/uploads")
 public class UploadController {

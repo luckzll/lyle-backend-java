@@ -7,6 +7,9 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 
+/**
+ * 审计日志服务实现。
+ */
 @Service
 public class AuditLogServiceImpl implements AuditLogService {
 

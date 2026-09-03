@@ -3,41 +3,36 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.example.aiapp.mapper.KnowledgeFileMapper">
 
-    <select id="selectByKnowledgeBaseId" resultType="com.example.aiapp.domain.entity.KnowledgeFileEntity">
-        SELECT
-            id,
-            knowledge_base_id,
-            file_name,
-            storage_path,
-            storage_provider,
-            bucket,
-            object_key,
-            original_name,
-            content_type,
-            file_size,
-            visibility,
-            parse_status,
-            created_at
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.KnowledgeFileEntity">
+        <id column="id" property="id"/>
+        <result column="knowledge_base_id" property="knowledgeBaseId"/>
+        <result column="file_name" property="fileName"/>
+        <result column="storage_path" property="storagePath"/>
+        <result column="storage_provider" property="storageProvider"/>
+        <result column="bucket" property="bucket"/>
+        <result column="object_key" property="objectKey"/>
+        <result column="original_name" property="originalName"/>
+        <result column="content_type" property="contentType"/>
+        <result column="file_size" property="fileSize"/>
+        <result column="visibility" property="visibility"/>
+        <result column="parse_status" property="parseStatus"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, knowledge_base_id, file_name, storage_path, storage_provider, bucket,
+        object_key, original_name, content_type, file_size, visibility, parse_status, created_at
+    </sql>
+
+    <select id="selectByKnowledgeBaseId" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
         FROM knowledge_file
         WHERE knowledge_base_id = #{knowledgeBaseId}
         ORDER BY created_at DESC
     </select>
 
-    <select id="selectByIdAndKnowledgeBaseId" resultType="com.example.aiapp.domain.entity.KnowledgeFileEntity">
-        SELECT
-            id,
-            knowledge_base_id,
-            file_name,
-            storage_path,
-            storage_provider,
-            bucket,
-            object_key,
-            original_name,
-            content_type,
-            file_size,
-            visibility,
-            parse_status,
-            created_at
+    <select id="selectByIdAndKnowledgeBaseId" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
         FROM knowledge_file
         WHERE id = #{id}
           AND knowledge_base_id = #{knowledgeBaseId}
@@ -48,5 +43,12 @@
         DELETE FROM knowledge_file
         WHERE knowledge_base_id = #{knowledgeBaseId}
     </delete>
+
+    <select id="selectPageByKnowledgeBaseId" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM knowledge_file
+        WHERE knowledge_base_id = #{knowledgeBaseId}
+        ORDER BY created_at DESC, id DESC
+    </select>
 
 </mapper>

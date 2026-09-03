@@ -13,6 +13,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 智能体任务异常查询与处理接口。
+ */
 @RestController
 @RequestMapping("/exceptions")
 public class MissionExceptionController {

@@ -3,12 +3,12 @@ package com.example.aiapp.service.impl;
 import com.example.aiapp.billing.BillingMetrics;
 import com.example.aiapp.billing.BillingProperties;
 import com.example.aiapp.billing.BillingRequests;
+import com.example.aiapp.mapper.CommercialAccountMapper;
 import com.example.aiapp.service.BillingAccountService;
 import com.example.aiapp.usage.UsageEventRequest;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
@@ -18,8 +18,6 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -31,24 +29,27 @@ import java.util.UUID;
 
 import static com.example.aiapp.billing.support.BillingIdentifiers.nextId;
 
+/**
+ * 商业账户与额度服务实现。
+ */
 @Service
 public class BillingAccountServiceImpl implements BillingAccountService {
 
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
 
-    private final JdbcTemplate jdbcTemplate;
+    private final CommercialAccountMapper commercialAccountMapper;
     private final ObjectMapper objectMapper;
     private final BillingProperties properties;
     private final BillingMetrics metrics;
 
     public BillingAccountServiceImpl(
-            JdbcTemplate jdbcTemplate,
+            CommercialAccountMapper commercialAccountMapper,
             ObjectMapper objectMapper,
             BillingProperties properties,
             BillingMetrics metrics
     ) {
-        this.jdbcTemplate = jdbcTemplate;
+        this.commercialAccountMapper = commercialAccountMapper;
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.metrics = metrics;
@@ -66,28 +67,13 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         response.put("status", account.get("status"));
         response.put("plan", currentPlan(userId));
         response.put("availableCreditMicros", available);
-        response.put("totalGrantedCreditMicros", aggregateLong(
-                "SELECT COALESCE(SUM(quantity_micros), 0) FROM entitlement_grant WHERE account_id = ?",
-                accountId
+        response.put("totalGrantedCreditMicros", zeroIfNull(
+                commercialAccountMapper.sumGrantedCredits(accountId)
         ));
-        response.put("totalConsumedCreditMicros", aggregateLong(
-                """
-                SELECT COALESCE(SUM(credit_micros), 0)
-                FROM commercial_ledger_entry
-                WHERE account_id = ? AND entry_type = 'USAGE_DEBIT'
-                """,
-                accountId
+        response.put("totalConsumedCreditMicros", zeroIfNull(
+                commercialAccountMapper.sumConsumedCredits(accountId)
         ));
-        response.put("nextExpiryAt", jdbcTemplate.query(
-                """
-                SELECT MIN(expires_at)
-                FROM entitlement_grant
-                WHERE account_id = ? AND status = 'ACTIVE' AND remaining_micros > 0
-                  AND expires_at IS NOT NULL AND expires_at > CURRENT_TIMESTAMP(6)
-                """,
-                resultSet -> resultSet.next() ? localDateTime(resultSet.getObject(1)) : null,
-                accountId
-        ));
+        response.put("nextExpiryAt", commercialAccountMapper.selectNextExpiryAt(accountId));
         response.put("commercialQuotaEnforced", properties.quotaEnforcementEnabled());
         response.put("settlementMode", properties.settlementShadowEnabled() ? "SHADOW" : "ACTIVE");
         response.put("checkoutEnabled", properties.checkoutEnabled());
@@ -102,20 +88,10 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         grantWelcomeCredits(accountId, userId);
         int boundedLimit = Math.max(1, Math.min(limit, 100));
         String normalizedType = normalizeNullable(type);
-        String sql = """
-                SELECT e.id, e.entry_type, e.direction, e.credit_micros,
-                       e.balance_after_micros, e.source_type, e.source_id,
-                       e.occurred_at, e.expires_at, e.metadata_json
-                FROM commercial_ledger_entry e
-                WHERE e.account_id = ?
-                """ + (normalizedType == null ? "" : " AND e.entry_type = ?") + """
-                ORDER BY e.occurred_at DESC, e.id DESC
-                LIMIT ?
-                """;
-        Object[] arguments = normalizedType == null
-                ? new Object[]{accountId, boundedLimit}
-                : new Object[]{accountId, normalizedType, boundedLimit};
-        return jdbcTemplate.query(sql, (resultSet, rowNum) -> ledgerRow(resultSet), arguments);
+        return commercialAccountMapper.selectLedger(accountId, normalizedType, boundedLimit)
+                .stream()
+                .map(this::ledgerRow)
+                .toList();
     }
 
     @Override
@@ -124,17 +100,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         if (!properties.fulfillmentWorkerEnabled()) {
             return List.of();
         }
-        return jdbcTemplate.query(
-                """
-                SELECT aggregate_id
-                FROM billing_outbox
-                WHERE event_type = 'FULFILL_ORDER'
-                  AND status IN ('PENDING', 'RETRY')
-                  AND next_attempt_at <= CURRENT_TIMESTAMP(6)
-                ORDER BY created_at
-                LIMIT ?
-                """,
-                (resultSet, rowNum) -> resultSet.getString(1),
+        return commercialAccountMapper.selectPendingFulfillmentOrders(
                 Math.max(1, Math.min(limit, 50))
         );
     }
@@ -145,16 +111,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         if (!properties.ledgerEnabled()) {
             return List.of();
         }
-        return jdbcTemplate.query(
-                """
-                SELECT id
-                FROM entitlement_grant
-                WHERE status = 'ACTIVE' AND remaining_micros > 0
-                  AND expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP(6)
-                ORDER BY expires_at
-                LIMIT ?
-                """,
-                (resultSet, rowNum) -> resultSet.getLong(1),
+        return commercialAccountMapper.selectExpiredGrantIds(
                 Math.max(1, Math.min(limit, 200))
         );
     }
@@ -162,14 +119,10 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     @Override
     @Transactional
     public void expireGrant(long grantId) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT * FROM entitlement_grant WHERE id = ? FOR UPDATE",
-                grantId
-        );
-        if (rows.isEmpty()) {
+        Map<String, Object> grant = commercialAccountMapper.selectGrantById(grantId, true);
+        if (grant == null) {
             return;
         }
-        Map<String, Object> grant = rows.get(0);
         long remaining = number(grant.get("remaining_micros"));
         LocalDateTime expiresAt = localDateTime(grant.get("expires_at"));
         if (!"ACTIVE".equals(normalize(String.valueOf(grant.get("status"))))
@@ -179,24 +132,9 @@ public class BillingAccountServiceImpl implements BillingAccountService {
             return;
         }
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                UPDATE entitlement_grant
-                SET status = 'EXPIRED', remaining_micros = 0, updated_at = ?
-                WHERE id = ?
-                """,
-                now,
-                grantId
-        );
+        commercialAccountMapper.expireGrant(grantId, now);
         long accountId = number(grant.get("account_id"));
-        jdbcTemplate.update(
-                """
-                INSERT IGNORE INTO commercial_ledger_entry (
-                    id, account_id, grant_id, entry_type, direction,
-                    credit_micros, balance_after_micros, source_type, source_id,
-                    idempotency_key, occurred_at, expires_at, metadata_json, created_at
-                ) VALUES (?, ?, ?, 'EXPIRATION', 'DEBIT', ?, ?, 'GRANT', ?, ?, ?, ?, ?, ?)
-                """,
+        commercialAccountMapper.insertExpirationLedger(
                 nextId(),
                 accountId,
                 grantId,
@@ -206,8 +144,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
                 safe("EXPIRATION:" + grantId, 128),
                 now,
                 grant.get("expires_at"),
-                json(Map.of()),
-                now
+                json(Map.of())
         );
     }
 
@@ -224,11 +161,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
             throw conflict("订单尚未完成支付确认。");
         }
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                "UPDATE billing_order SET status = 'FULFILLING', updated_at = ? WHERE id = ?",
-                now,
-                order.get("id")
-        );
+        commercialAccountMapper.markOrderFulfilling(number(order.get("id")), now);
         Map<String, Object> snapshot = jsonMap(order.get("product_snapshot"));
         long credits = number(snapshot.get("includedCreditMicros"));
         String productType = normalize(String.valueOf(snapshot.get("productType")));
@@ -258,16 +191,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
                         "productType", productType
                 )
         );
-        jdbcTemplate.update(
-                """
-                UPDATE billing_order
-                SET status = 'FULFILLED', fulfilled_at = COALESCE(fulfilled_at, ?), updated_at = ?
-                WHERE id = ?
-                """,
-                now,
-                now,
-                order.get("id")
-        );
+        commercialAccountMapper.markOrderFulfilled(number(order.get("id")), now);
         markOutboxProcessed(orderNo, "FULFILL_ORDER");
         LocalDateTime paidAt = localDateTime(order.get("paid_at"));
         metrics.orderFulfilled(paidAt == null ? null : Duration.between(paidAt, now));
@@ -278,19 +202,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         String message = exception.getMessage() == null
                 ? exception.getClass().getSimpleName()
                 : exception.getMessage();
-        jdbcTemplate.update(
-                """
-                UPDATE billing_outbox
-                SET status = CASE WHEN retry_count >= 9 THEN 'DEAD' ELSE 'RETRY' END,
-                    retry_count = retry_count + 1,
-                    next_attempt_at = DATE_ADD(CURRENT_TIMESTAMP(6), INTERVAL LEAST(3600, POW(2, retry_count + 1)) SECOND),
-                    last_error = ?
-                WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'FULFILL_ORDER'
-                  AND status <> 'PROCESSED'
-                """,
-                safe(message, 512),
-                orderNo
-        );
+        commercialAccountMapper.markFulfillmentFailed(orderNo, safe(message, 512));
     }
 
     @Override
@@ -304,19 +216,9 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         Map<String, Object> account = ensureAccount(userId);
         long accountId = number(account.get("id"));
         grantWelcomeCredits(accountId, userId);
-        jdbcTemplate.queryForMap(
-                "SELECT id FROM commercial_account WHERE id = ? FOR UPDATE",
-                accountId
-        );
+        commercialAccountMapper.lockAccountById(accountId);
         long available = availableCredits(accountId);
-        long active = aggregateLong(
-                """
-                SELECT COALESCE(SUM(reserved_credit_micros - consumed_credit_micros), 0)
-                FROM commercial_reservation
-                WHERE account_id = ? AND status = 'ACTIVE' AND expires_at > CURRENT_TIMESTAMP(6)
-                """,
-                accountId
-        );
+        long active = zeroIfNull(commercialAccountMapper.sumActiveReservationCredits(accountId));
         long reserve = Math.max(1, properties.reservationCreditMicros());
         if (available - active < reserve) {
             metrics.commercialInsufficient();
@@ -327,20 +229,13 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         }
         String reservationId = UUID.randomUUID().toString();
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                INSERT INTO commercial_reservation (
-                    id, account_id, user_id, turn_id, reserved_credit_micros,
-                    consumed_credit_micros, status, expires_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 0, 'ACTIVE', ?, ?, ?)
-                """,
+        commercialAccountMapper.insertReservation(
                 reservationId,
                 accountId,
                 userId,
                 safeNullable(turnId, 128),
                 reserve,
                 now.plusMinutes(Math.max(1, properties.reservationTtlMinutes())),
-                now,
                 now
         );
         return reservationId;
@@ -351,15 +246,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         if (!StringUtils.hasText(reservationId)) {
             return;
         }
-        jdbcTemplate.update(
-                """
-                UPDATE commercial_reservation
-                SET status = 'RELEASED', updated_at = ?
-                WHERE id = ? AND status = 'ACTIVE'
-                """,
-                LocalDateTime.now(),
-                reservationId
-        );
+        commercialAccountMapper.releaseReservation(reservationId, LocalDateTime.now());
     }
 
     @Override
@@ -388,19 +275,12 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         grantWelcomeCredits(accountId, userId);
         String reservationId = activeReservationId(userId, event.turnId());
         String initialStatus = properties.settlementShadowEnabled() ? "SHADOW" : "PENDING";
-        int inserted = jdbcTemplate.update(
-                """
-                INSERT IGNORE INTO billable_usage (
-                    id, usage_event_id, user_id, account_id, pricing_version_code,
-                    charge_credit_micros, usage_source, status, reservation_id,
-                    metadata_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+        int inserted = commercialAccountMapper.insertBillableUsage(
                 nextId(),
                 event.eventId(),
                 userId,
                 accountId,
-                pricing.get("version_code"),
+                String.valueOf(pricing.get("version_code")),
                 charge,
                 normalize(event.usageSource()),
                 initialStatus,
@@ -417,48 +297,25 @@ public class BillingAccountServiceImpl implements BillingAccountService {
             return;
         }
         if (properties.settlementShadowEnabled()) {
-            jdbcTemplate.update(
-                    "UPDATE billable_usage SET settled_at = ? WHERE usage_event_id = ?",
-                    LocalDateTime.now(),
-                    event.eventId()
-            );
+            commercialAccountMapper.markUsageShadowSettled(event.eventId(), LocalDateTime.now());
             metrics.commercialInsufficient();
             return;
         }
         Long firstLedgerId = debitCredits(accountId, event.eventId(), charge, event);
         if (firstLedgerId == null) {
-            jdbcTemplate.update(
-                    """
-                    UPDATE billable_usage
-                    SET status = 'INSUFFICIENT', settled_at = ?
-                    WHERE usage_event_id = ?
-                    """,
-                    LocalDateTime.now(),
-                    event.eventId()
-            );
+            commercialAccountMapper.markUsageInsufficient(event.eventId(), LocalDateTime.now());
             return;
         }
-        jdbcTemplate.update(
-                """
-                UPDATE billable_usage
-                SET status = 'SETTLED', ledger_entry_id = ?, settled_at = ?
-                WHERE usage_event_id = ?
-                """,
+        commercialAccountMapper.markUsageSettled(
+                event.eventId(),
                 firstLedgerId,
-                LocalDateTime.now(),
-                event.eventId()
+                LocalDateTime.now()
         );
         if (reservationId != null) {
-            jdbcTemplate.update(
-                    """
-                    UPDATE commercial_reservation
-                    SET consumed_credit_micros = LEAST(reserved_credit_micros, consumed_credit_micros + ?),
-                        status = 'SETTLED', updated_at = ?
-                    WHERE id = ?
-                    """,
+            commercialAccountMapper.settleReservation(
+                    reservationId,
                     charge,
-                    LocalDateTime.now(),
-                    reservationId
+                    LocalDateTime.now()
             );
         }
         metrics.commercialDebit(charge);
@@ -470,16 +327,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         if (!properties.ledgerEnabled() || activeUsagePricing() == null) {
             return List.of();
         }
-        return jdbcTemplate.query(
-                """
-                SELECT e.event_id
-                FROM ai_usage_event e
-                LEFT JOIN billable_usage b ON b.usage_event_id = e.event_id
-                WHERE b.usage_event_id IS NULL AND e.status = 'SUCCEEDED'
-                ORDER BY e.received_at
-                LIMIT ?
-                """,
-                (resultSet, rowNum) -> resultSet.getString(1),
+        return commercialAccountMapper.selectPendingUsageEventIds(
                 Math.max(1, Math.min(limit, 200))
         );
     }
@@ -487,49 +335,19 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void settleUsageEvent(String eventId) {
-        List<UsageEventRequest> events = jdbcTemplate.query(
-                "SELECT * FROM ai_usage_event WHERE event_id = ?",
-                (resultSet, rowNum) -> new UsageEventRequest(
-                        resultSet.getString("event_id"),
-                        String.valueOf(resultSet.getLong("user_id")),
-                        resultSet.getString("conversation_id"),
-                        resultSet.getString("turn_id"),
-                        resultSet.getString("trace_id"),
-                        resultSet.getString("reservation_id"),
-                        resultSet.getString("call_type"),
-                        resultSet.getString("task_type"),
-                        resultSet.getString("provider"),
-                        resultSet.getString("model"),
-                        resultSet.getString("route_version"),
-                        resultSet.getLong("input_tokens"),
-                        resultSet.getLong("output_tokens"),
-                        resultSet.getLong("cache_read_tokens"),
-                        resultSet.getLong("cache_write_tokens"),
-                        resultSet.getString("usage_source"),
-                        resultSet.getLong("estimated_cost_micros"),
-                        resultSet.getString("pricing_version"),
-                        resultSet.getString("currency"),
-                        resultSet.getLong("latency_millis"),
-                        resultSet.getString("status"),
-                        resultSet.getString("error_category"),
-                        resultSet.getTimestamp("occurred_at").toLocalDateTime().atOffset(ZoneOffset.ofHours(8))
-                ),
-                safe(eventId, 64)
-        );
-        if (!events.isEmpty()) {
-            settleUsageInternal(events.get(0));
+        Map<String, Object> row = commercialAccountMapper.selectUsageEvent(safe(eventId, 64));
+        if (row != null) {
+            settleUsageInternal(usageEvent(row));
         }
     }
 
     @Override
     @Transactional
     public Map<String, Object> publishUsagePricing(BillingRequests.PublishUsagePricing request) {
-        List<Map<String, Object>> existing = jdbcTemplate.queryForList(
-                "SELECT * FROM billing_usage_pricing_version WHERE version_code = ?",
-                normalizeCode(request.versionCode(), 64)
-        );
-        if (!existing.isEmpty()) {
-            return existing.get(0);
+        String versionCode = normalizeCode(request.versionCode(), 64);
+        Map<String, Object> existing = commercialAccountMapper.selectUsagePricingByVersion(versionCode);
+        if (existing != null) {
+            return existing;
         }
         LocalDateTime effectiveFrom = request.effectiveFrom() == null
                 ? LocalDateTime.now()
@@ -540,25 +358,15 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         validatePricingRules(request.rules());
         long id = nextId();
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                INSERT INTO billing_usage_pricing_version (
-                    id, version_code, rules_json, status, effective_from,
-                    effective_until, created_at, published_at
-                ) VALUES (?, ?, ?, 'PUBLISHED', ?, ?, ?, ?)
-                """,
+        commercialAccountMapper.insertUsagePricing(
                 id,
-                normalizeCode(request.versionCode(), 64),
+                versionCode,
                 json(request.rules()),
                 effectiveFrom,
                 request.effectiveUntil(),
-                now,
                 now
         );
-        return jdbcTemplate.queryForMap(
-                "SELECT * FROM billing_usage_pricing_version WHERE id = ?",
-                id
-        );
+        return commercialAccountMapper.selectUsagePricingById(id);
     }
 
     @Override
@@ -589,34 +397,13 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     }
 
     private Map<String, Object> ensureAccount(long userId) {
-        List<Map<String, Object>> existing = jdbcTemplate.queryForList(
-                "SELECT * FROM commercial_account WHERE user_id = ?",
-                userId
-        );
-        if (!existing.isEmpty()) {
-            return existing.get(0);
+        Map<String, Object> existing = commercialAccountMapper.selectAccountByUserId(userId, false);
+        if (existing != null) {
+            return existing;
         }
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                INSERT IGNORE INTO commercial_account (
-                    id, user_id, status, version, created_at, updated_at
-                ) VALUES (?, ?, 'ACTIVE', 0, ?, ?)
-                """,
-                nextId(),
-                userId,
-                now,
-                now
-        );
-        return jdbcTemplate.queryForMap(
-                """
-                SELECT *
-                FROM commercial_account
-                WHERE user_id = ?
-                FOR UPDATE
-                """,
-                userId
-        );
+        commercialAccountMapper.insertAccountIgnore(nextId(), userId, now);
+        return commercialAccountMapper.selectAccountByUserId(userId, true);
     }
 
     private void grantWelcomeCredits(long accountId, long userId) {
@@ -657,15 +444,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         }
         long grantId = nextId();
         LocalDateTime now = LocalDateTime.now();
-        int inserted = jdbcTemplate.update(
-                """
-                INSERT IGNORE INTO entitlement_grant (
-                    id, account_id, grant_type, source_type, source_id,
-                    entitlement_code, price_version_code, quantity_micros,
-                    remaining_micros, valid_from, expires_at, status,
-                    metadata_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)
-                """,
+        int inserted = commercialAccountMapper.insertGrant(
                 grantId,
                 accountId,
                 normalize(grantType),
@@ -674,25 +453,16 @@ public class BillingAccountServiceImpl implements BillingAccountService {
                 normalizeCode(entitlementCode, 64),
                 safeNullable(priceVersionCode, 64),
                 quantityMicros,
-                quantityMicros,
                 validFrom,
                 expiresAt,
                 json(metadata),
-                now,
                 now
         );
         if (inserted == 0) {
             return;
         }
         long balance = availableCredits(accountId);
-        jdbcTemplate.update(
-                """
-                INSERT IGNORE INTO commercial_ledger_entry (
-                    id, account_id, grant_id, entry_type, direction,
-                    credit_micros, balance_after_micros, source_type, source_id,
-                    idempotency_key, occurred_at, expires_at, metadata_json, created_at
-                ) VALUES (?, ?, ?, ?, 'CREDIT', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+        commercialAccountMapper.insertCreditLedger(
                 nextId(),
                 accountId,
                 grantId,
@@ -704,8 +474,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
                 safe(normalize(ledgerType) + ":" + sourceType + ":" + sourceId + ":" + entitlementCode, 128),
                 now,
                 expiresAt,
-                json(metadata),
-                now
+                json(metadata)
         );
     }
 
@@ -715,20 +484,8 @@ public class BillingAccountServiceImpl implements BillingAccountService {
             long charge,
             UsageEventRequest event
     ) {
-        List<Map<String, Object>> grants = jdbcTemplate.queryForList(
-                """
-                SELECT id, remaining_micros, expires_at
-                FROM entitlement_grant
-                WHERE account_id = ? AND status = 'ACTIVE'
-                  AND remaining_micros > 0
-                  AND valid_from <= CURRENT_TIMESTAMP(6)
-                  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(6))
-                ORDER BY CASE WHEN expires_at IS NULL THEN 1 ELSE 0 END,
-                         expires_at, created_at, id
-                FOR UPDATE
-                """,
-                accountId
-        );
+        List<Map<String, Object>> grants =
+                commercialAccountMapper.selectSpendableGrantsForUpdate(accountId);
         long available = grants.stream().mapToLong(row -> number(row.get("remaining_micros"))).sum();
         if (available < charge) {
             return null;
@@ -738,43 +495,30 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         for (Map<String, Object> grant : grants) {
             if (remaining == 0) break;
             long debit = Math.min(remaining, number(grant.get("remaining_micros")));
-            jdbcTemplate.update(
-                    """
-                    UPDATE entitlement_grant
-                    SET remaining_micros = remaining_micros - ?, updated_at = ?
-                    WHERE id = ? AND remaining_micros >= ?
-                    """,
+            commercialAccountMapper.decrementGrant(
+                    number(grant.get("id")),
                     debit,
-                    LocalDateTime.now(),
-                    grant.get("id"),
-                    debit
+                    LocalDateTime.now()
             );
             long ledgerId = nextId();
             if (firstLedgerId == null) firstLedgerId = ledgerId;
             long balance = availableCredits(accountId);
-            jdbcTemplate.update(
-                    """
-                    INSERT INTO commercial_ledger_entry (
-                        id, account_id, grant_id, entry_type, direction,
-                        credit_micros, balance_after_micros, source_type, source_id,
-                        idempotency_key, occurred_at, expires_at, metadata_json, created_at
-                    ) VALUES (?, ?, ?, 'USAGE_DEBIT', 'DEBIT', ?, ?, 'USAGE_EVENT', ?, ?, ?, ?, ?, ?)
-                    """,
+            LocalDateTime occurredAt = LocalDateTime.now();
+            commercialAccountMapper.insertUsageDebitLedger(
                     ledgerId,
                     accountId,
-                    grant.get("id"),
+                    number(grant.get("id")),
                     debit,
                     balance,
                     usageEventId,
                     safe("USAGE_DEBIT:" + usageEventId + ":" + grant.get("id"), 128),
-                    LocalDateTime.now(),
+                    occurredAt,
                     grant.get("expires_at"),
                     json(Map.of(
                             "callType", normalize(event.callType()),
                             "taskType", normalize(event.taskType()),
                             "traceId", event.traceId()
-                    )),
-                    LocalDateTime.now()
+                    ))
             );
             remaining -= debit;
         }
@@ -782,37 +526,12 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     }
 
     private long availableCredits(long accountId) {
-        return aggregateLong(
-                """
-                SELECT COALESCE(SUM(remaining_micros), 0)
-                FROM entitlement_grant
-                WHERE account_id = ? AND status = 'ACTIVE'
-                  AND remaining_micros > 0
-                  AND valid_from <= CURRENT_TIMESTAMP(6)
-                  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(6))
-                """,
-                accountId
-        );
+        return zeroIfNull(commercialAccountMapper.sumAvailableCredits(accountId));
     }
 
     private Map<String, Object> currentPlan(long userId) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                """
-                SELECT o.order_no, o.product_snapshot, o.fulfilled_at,
-                       MAX(g.valid_from) AS valid_from, MAX(g.expires_at) AS expires_at
-                FROM billing_order o
-                JOIN entitlement_grant g ON g.source_type = 'ORDER' AND g.source_id = o.order_no
-                WHERE o.user_id = ? AND o.status IN ('FULFILLED', 'REFUNDING')
-                  AND g.status = 'ACTIVE'
-                  AND JSON_UNQUOTE(JSON_EXTRACT(o.product_snapshot, '$.productType')) = 'PLAN'
-                  AND (g.expires_at IS NULL OR g.expires_at > CURRENT_TIMESTAMP(6))
-                GROUP BY o.id, o.order_no, o.product_snapshot, o.fulfilled_at
-                ORDER BY expires_at DESC, o.fulfilled_at DESC
-                LIMIT 1
-                """,
-                userId
-        );
-        if (rows.isEmpty()) {
+        Map<String, Object> row = commercialAccountMapper.selectCurrentPlan(userId);
+        if (row == null) {
             return Map.of(
                     "code", "FREE",
                     "name", "免费版",
@@ -820,7 +539,6 @@ public class BillingAccountServiceImpl implements BillingAccountService {
                     "benefits", List.of("基础聊天、记忆与免费 AI 额度")
             );
         }
-        Map<String, Object> row = rows.get(0);
         Map<String, Object> snapshot = jsonMap(row.get("product_snapshot"));
         Map<String, Object> plan = new LinkedHashMap<>();
         plan.put("code", snapshot.get("productCode"));
@@ -834,32 +552,11 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     }
 
     private LocalDateTime latestPlanExpiry(long accountId) {
-        return jdbcTemplate.query(
-                """
-                SELECT MAX(g.expires_at)
-                FROM entitlement_grant g
-                JOIN billing_order o ON o.order_no = g.source_id AND g.source_type = 'ORDER'
-                WHERE g.account_id = ? AND g.status = 'ACTIVE'
-                  AND JSON_UNQUOTE(JSON_EXTRACT(o.product_snapshot, '$.productType')) = 'PLAN'
-                """,
-                resultSet -> resultSet.next() ? localDateTime(resultSet.getObject(1)) : null,
-                accountId
-        );
+        return commercialAccountMapper.selectLatestPlanExpiry(accountId);
     }
 
     private Map<String, Object> activeUsagePricing() {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                """
-                SELECT version_code, rules_json
-                FROM billing_usage_pricing_version
-                WHERE status = 'PUBLISHED'
-                  AND effective_from <= CURRENT_TIMESTAMP(6)
-                  AND (effective_until IS NULL OR effective_until > CURRENT_TIMESTAMP(6))
-                ORDER BY effective_from DESC, id DESC
-                LIMIT 1
-                """
-        );
-        return rows.isEmpty() ? null : rows.get(0);
+        return commercialAccountMapper.selectActiveUsagePricing();
     }
 
     private long calculateCharge(UsageEventRequest event, Map<String, Object> rules) {
@@ -900,57 +597,69 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         if (!StringUtils.hasText(turnId)) {
             return null;
         }
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                """
-                SELECT id
-                FROM commercial_reservation
-                WHERE user_id = ? AND turn_id = ?
-                  AND status = 'ACTIVE' AND expires_at > CURRENT_TIMESTAMP(6)
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                userId,
-                turnId
-        );
-        return rows.isEmpty() ? null : String.valueOf(rows.get(0).get("id"));
+        return commercialAccountMapper.selectActiveReservationId(userId, turnId);
     }
 
     private Map<String, Object> requireOrder(String orderNo, boolean forUpdate) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT * FROM billing_order WHERE order_no = ?" + (forUpdate ? " FOR UPDATE" : ""),
-                safe(orderNo, 64)
+        Map<String, Object> row = commercialAccountMapper.selectOrderByOrderNo(
+                safe(orderNo, 64),
+                forUpdate
         );
-        if (rows.isEmpty()) {
+        if (row == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
-        return rows.get(0);
+        return row;
     }
 
     private void markOutboxProcessed(String aggregateId, String eventType) {
-        jdbcTemplate.update(
-                """
-                UPDATE billing_outbox
-                SET status = 'PROCESSED', processed_at = ?, last_error = NULL
-                WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = ?
-                """,
-                LocalDateTime.now(),
+        commercialAccountMapper.markOutboxProcessed(
                 aggregateId,
-                eventType
+                eventType,
+                LocalDateTime.now()
         );
     }
 
-    private Map<String, Object> ledgerRow(ResultSet resultSet) throws SQLException {
+    private Map<String, Object> ledgerRow(Map<String, Object> row) {
         Map<String, Object> item = new LinkedHashMap<>();
-        item.put("entryType", resultSet.getString("entry_type"));
-        item.put("direction", resultSet.getString("direction"));
-        item.put("creditMicros", resultSet.getLong("credit_micros"));
-        item.put("balanceAfterMicros", resultSet.getLong("balance_after_micros"));
-        item.put("sourceType", resultSet.getString("source_type"));
-        item.put("sourceId", resultSet.getString("source_id"));
-        item.put("occurredAt", localDateTime(resultSet.getObject("occurred_at")));
-        item.put("expiresAt", localDateTime(resultSet.getObject("expires_at")));
-        item.put("metadata", jsonMap(resultSet.getString("metadata_json")));
+        item.put("entryType", row.get("entry_type"));
+        item.put("direction", row.get("direction"));
+        item.put("creditMicros", number(row.get("credit_micros")));
+        item.put("balanceAfterMicros", number(row.get("balance_after_micros")));
+        item.put("sourceType", row.get("source_type"));
+        item.put("sourceId", row.get("source_id"));
+        item.put("occurredAt", localDateTime(row.get("occurred_at")));
+        item.put("expiresAt", localDateTime(row.get("expires_at")));
+        item.put("metadata", jsonMap(row.get("metadata_json")));
         return item;
+    }
+
+    private UsageEventRequest usageEvent(Map<String, Object> row) {
+        LocalDateTime occurredAt = localDateTime(row.get("occurred_at"));
+        return new UsageEventRequest(
+                String.valueOf(row.get("event_id")),
+                String.valueOf(number(row.get("user_id"))),
+                stringValue(row.get("conversation_id")),
+                stringValue(row.get("turn_id")),
+                stringValue(row.get("trace_id")),
+                stringValue(row.get("reservation_id")),
+                stringValue(row.get("call_type")),
+                stringValue(row.get("task_type")),
+                stringValue(row.get("provider")),
+                stringValue(row.get("model")),
+                stringValue(row.get("route_version")),
+                number(row.get("input_tokens")),
+                number(row.get("output_tokens")),
+                number(row.get("cache_read_tokens")),
+                number(row.get("cache_write_tokens")),
+                stringValue(row.get("usage_source")),
+                number(row.get("estimated_cost_micros")),
+                stringValue(row.get("pricing_version")),
+                stringValue(row.get("currency")),
+                number(row.get("latency_millis")),
+                stringValue(row.get("status")),
+                stringValue(row.get("error_category")),
+                occurredAt.atOffset(ZoneOffset.ofHours(8))
+        );
     }
 
     private Map<String, Object> jsonMap(Object value) {
@@ -977,9 +686,12 @@ public class BillingAccountServiceImpl implements BillingAccountService {
         }
     }
 
-    private long aggregateLong(String sql, Object... arguments) {
-        Long result = jdbcTemplate.queryForObject(sql, Long.class, arguments);
-        return result == null ? 0 : result;
+    private static long zeroIfNull(Long value) {
+        return value == null ? 0 : value;
+    }
+
+    private static String stringValue(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 
     private static long positiveNumber(Object value, long fallback) {

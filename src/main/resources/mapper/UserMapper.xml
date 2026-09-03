@@ -3,18 +3,26 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.example.aiapp.mapper.UserMapper">
 
-    <select id="selectByUsername" resultType="com.example.aiapp.domain.entity.UserEntity">
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.UserEntity">
+        <id column="id" property="id"/>
+        <result column="username" property="username"/>
+        <result column="role" property="role"/>
+        <result column="status" property="status"/>
+        <result column="auth_version" property="authVersion"/>
+        <result column="password_hash" property="passwordHash"/>
+        <result column="password_changed_at" property="passwordChangedAt"/>
+        <result column="last_login_at" property="lastLoginAt"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, username, role, status, auth_version, password_hash, password_changed_at, last_login_at, created_at, updated_at
+    </sql>
+
+    <select id="selectByUsername" resultMap="BaseResultMap">
         SELECT
-            id,
-            username,
-            role,
-            status,
-            auth_version,
-            password_hash,
-            password_changed_at,
-            last_login_at,
-            created_at,
-            updated_at
+            <include refid="Base_Column_List"/>
         FROM app_user
         WHERE username = #{username}
         LIMIT 1

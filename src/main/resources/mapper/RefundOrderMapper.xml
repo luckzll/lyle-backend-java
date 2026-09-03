@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.RefundOrderMapper">
+
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.RefundOrderEntity">
+        <id column="id" property="id"/>
+        <result column="refund_no" property="refundNo"/>
+        <result column="request_id" property="requestId"/>
+        <result column="order_id" property="orderId"/>
+        <result column="payment_attempt_id" property="paymentAttemptId"/>
+        <result column="user_id" property="userId"/>
+        <result column="status" property="status"/>
+        <result column="currency" property="currency"/>
+        <result column="amount_minor" property="amountMinor"/>
+        <result column="reason_code" property="reasonCode"/>
+        <result column="reason_note" property="reasonNote"/>
+        <result column="provider_refund_id" property="providerRefundId"/>
+        <result column="requested_by" property="requestedBy"/>
+        <result column="succeeded_at" property="succeededAt"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, refund_no, request_id, order_id, payment_attempt_id, user_id, status, currency, amount_minor, reason_code, reason_note, provider_refund_id, requested_by, succeeded_at, created_at, updated_at
+    </sql>
+
+    <!-- 查询用户退款记录及对应订单快照 -->
+    <select id="selectUserRefunds"
+            resultType="com.example.aiapp.domain.vo.BillingRefundReadVO">
+        SELECT
+            r.refund_no,
+            r.status,
+            r.currency,
+            r.amount_minor,
+            r.reason_code,
+            r.reason_note,
+            r.succeeded_at,
+            r.created_at,
+            o.order_no,
+            o.product_snapshot
+        FROM refund_order r
+        JOIN billing_order o ON o.id = r.order_id
+        WHERE r.user_id = #{userId}
+        ORDER BY r.created_at DESC
+    </select>
+
+    <select id="selectPendingRefundNumbers" resultType="java.lang.String">
+        SELECT refund_no
+        FROM refund_order
+        WHERE status = 'PROCESSING'
+          AND updated_at &lt;= DATE_SUB(CURRENT_TIMESTAMP(6), INTERVAL 10 SECOND)
+        ORDER BY updated_at
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectOrderByOrderNo" resultType="java.util.LinkedHashMap">
+        SELECT *
+        FROM billing_order
+        WHERE order_no = #{orderNo}
+        <if test="forUpdate">
+            FOR UPDATE
+        </if>
+    </select>
+
+    <select id="selectRefundNoByOrderIdAndRequestId" resultType="java.lang.String">
+        SELECT refund_no
+        FROM refund_order
+        WHERE order_id = #{orderId}
+          AND request_id = #{requestId}
+        LIMIT 1
+    </select>
+
+    <select id="sumActiveRefundAmount" resultType="long">
+        SELECT COALESCE(SUM(amount_minor), 0)
+        FROM refund_order
+        WHERE order_id = #{orderId}
+          AND status IN ('PROCESSING', 'SUCCEEDED')
+    </select>
+
+    <select id="sumConsumedGrantByOrderNo" resultType="long">
+        SELECT COALESCE(SUM(quantity_micros - remaining_micros), 0)
+        FROM entitlement_grant
+        WHERE source_type = 'ORDER'
+          AND source_id = #{orderNo}
+    </select>
+
+    <update id="touchRefund">
+        UPDATE refund_order
+        SET updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+    <update id="markOrderRefunding">
+        UPDATE billing_order
+        SET status = 'REFUNDING', updated_at = #{updatedAt}
+        WHERE id = #{orderId}
+    </update>
+
+    <update id="markRefundProcessing">
+        UPDATE refund_order
+        SET status = 'PROCESSING', updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+    <update id="markRefundFailed">
+        UPDATE refund_order
+        SET status = 'FAILED', updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+    <select id="selectOrderGrantsForUpdate" resultType="java.util.LinkedHashMap">
+        SELECT *
+        FROM entitlement_grant
+        WHERE source_type = 'ORDER'
+          AND source_id = #{orderNo}
+        FOR UPDATE
+    </select>
+
+    <update id="revokeGrantAndClear">
+        UPDATE entitlement_grant
+        SET remaining_micros = 0,
+            status = 'REVOKED',
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+    <update id="revokeGrant">
+        UPDATE entitlement_grant
+        SET status = 'REVOKED', updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+    <insert id="insertRefundReversal">
+        INSERT IGNORE INTO commercial_ledger_entry (
+            id, account_id, grant_id, entry_type, direction,
+            credit_micros, balance_after_micros, source_type, source_id,
+            idempotency_key, occurred_at, expires_at, metadata_json, created_at
+        ) VALUES (
+            #{id}, #{accountId}, #{grantId}, 'REFUND_REVERSAL', 'DEBIT',
+            #{creditMicros}, #{balanceAfterMicros}, 'REFUND', #{refundNo},
+            #{idempotencyKey}, #{occurredAt}, #{expiresAt}, #{metadataJson}, #{createdAt}
+        )
+    </insert>
+
+    <update id="markRefundSucceeded">
+        UPDATE refund_order
+        SET status = 'SUCCEEDED',
+            provider_refund_id = #{providerRefundId},
+            succeeded_at = #{succeededAt},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+    <update id="markOrderRefunded">
+        UPDATE billing_order
+        SET status = 'REFUNDED', updated_at = #{updatedAt}
+        WHERE id = #{orderId}
+    </update>
+
+    <select id="selectPaymentByPaymentNo" resultType="java.util.LinkedHashMap">
+        SELECT p.*, o.order_no, o.status AS order_status, o.user_id, o.account_id
+        FROM payment_attempt p
+        JOIN billing_order o ON o.id = p.order_id
+        WHERE p.payment_no = #{paymentNo}
+        LIMIT 1
+    </select>
+
+    <select id="selectRefundByRefundNo" resultType="java.util.LinkedHashMap">
+        SELECT r.*, o.order_no, p.payment_no
+        FROM refund_order r
+        JOIN billing_order o ON o.id = r.order_id
+        JOIN payment_attempt p ON p.id = r.payment_attempt_id
+        WHERE r.refund_no = #{refundNo}
+        <if test="forUpdate">
+            FOR UPDATE
+        </if>
+    </select>
+
+    <select id="selectLatestPaymentByOrderId" resultType="java.util.LinkedHashMap">
+        SELECT *
+        FROM payment_attempt
+        WHERE order_id = #{orderId}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    </select>
+
+    <select id="sumAvailableCredits" resultType="long">
+        SELECT COALESCE(SUM(remaining_micros), 0)
+        FROM entitlement_grant
+        WHERE account_id = #{accountId}
+          AND status = 'ACTIVE'
+          AND remaining_micros &gt; 0
+          AND valid_from &lt;= CURRENT_TIMESTAMP(6)
+          AND (expires_at IS NULL OR expires_at &gt; CURRENT_TIMESTAMP(6))
+    </select>
+
+</mapper>

@@ -7,6 +7,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 运行时配置接口。
+ */
 @RestController
 @RequestMapping("/runtime-config")
 public class RuntimeConfigController {

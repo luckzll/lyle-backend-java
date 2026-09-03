@@ -18,6 +18,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * AI 代理工具接口。
+ */
 @RestController
 @RequestMapping("/agent-tools")
 public class AgentToolController {

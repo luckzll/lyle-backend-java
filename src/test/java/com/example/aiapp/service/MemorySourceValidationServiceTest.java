@@ -8,6 +8,7 @@ import com.example.aiapp.mapper.ChatMessageMapper;
 import com.example.aiapp.mapper.ConversationMapper;
 import com.example.aiapp.mapper.KnowledgeBaseMapper;
 import com.example.aiapp.mapper.KnowledgeFileMapper;
+import com.example.aiapp.service.impl.MemorySourceValidationServiceImpl;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -25,7 +26,7 @@ class MemorySourceValidationServiceTest {
         ChatMessageMapper chatMessageMapper = mock(ChatMessageMapper.class);
         KnowledgeBaseMapper knowledgeBaseMapper = mock(KnowledgeBaseMapper.class);
         KnowledgeFileMapper knowledgeFileMapper = mock(KnowledgeFileMapper.class);
-        MemorySourceValidationService service = new MemorySourceValidationService(
+        MemorySourceValidationService service = new MemorySourceValidationServiceImpl(
                 conversationMapper, chatMessageMapper, knowledgeBaseMapper, knowledgeFileMapper
         );
 

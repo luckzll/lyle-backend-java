@@ -3,28 +3,39 @@ package com.example.aiapp.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.example.aiapp.domain.entity.BillingPriceVersionEntity;
 import com.example.aiapp.domain.vo.BillingCatalogRowVO;
-import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
+/**
+ * 商品价格版本数据访问接口。
+ */
+@Mapper
 public interface BillingPriceVersionMapper extends BaseMapper<BillingPriceVersionEntity> {
 
-    @Select("""
-            SELECT p.product_code, p.product_type, p.display_name, p.description,
-                   v.version_code, v.currency, v.amount_minor, v.included_credit_micros,
-                   v.validity_days, v.entitlement_snapshot, v.sell_until
-            FROM billing_product p
-            JOIN billing_price_version v ON v.product_id = p.id
-            WHERE p.status = 'ACTIVE'
-              AND v.status = 'PUBLISHED'
-              AND (v.sell_from IS NULL OR v.sell_from <= CURRENT_TIMESTAMP(6))
-              AND (v.sell_until IS NULL OR v.sell_until > CURRENT_TIMESTAMP(6))
-            ORDER BY CASE p.product_type
-                       WHEN 'PLAN' THEN 1
-                       WHEN 'CREDIT_PACK' THEN 2
-                       ELSE 3
-                     END,
-                     v.amount_minor
-            """)
+    /**
+     * 查询当前可售的已发布价格目录。
+     *
+     * @return 前端可展示的价格目录
+     */
     List<BillingCatalogRowVO> selectPublishedCatalog();
+
+    /**
+     * 按价格版本编码查询价格。
+     *
+     * @param versionCode 价格版本编码
+     * @return 价格版本，不存在时返回 {@code null}
+     */
+    BillingPriceVersionEntity selectByVersionCode(@Param("versionCode") String versionCode);
+
+    /**
+     * 以草稿状态为并发条件发布价格版本。
+     *
+     * @param id 价格版本主键
+     * @param publishedAt 发布时间
+     * @return 受影响行数
+     */
+    int publishDraft(@Param("id") Long id, @Param("publishedAt") LocalDateTime publishedAt);
 }

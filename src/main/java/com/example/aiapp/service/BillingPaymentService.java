@@ -6,6 +6,9 @@ import com.example.aiapp.billing.payment.WechatPayPaymentGateway;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 支付下单与回调处理服务。
+ */
 public interface BillingPaymentService {
 
     Map<String, Object> createOrder(long userId, BillingRequests.CreateOrder request);

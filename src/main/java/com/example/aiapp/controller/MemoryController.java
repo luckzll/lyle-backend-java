@@ -22,6 +22,9 @@ import java.util.UUID;
 import static org.springframework.http.HttpStatus.ACCEPTED;
 import static org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY;
 
+/**
+ * 长期记忆接口。
+ */
 @RestController
 @RequestMapping("/memory")
 public class MemoryController {

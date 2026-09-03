@@ -7,6 +7,9 @@ import java.util.Map;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
+/**
+ * AI 对话模型目录，负责将前端模型标识转换为后端路由配置。
+ */
 final class ChatModelCatalog {
 
     private static final Map<String, ModelRoute> ROUTES = Map.of(

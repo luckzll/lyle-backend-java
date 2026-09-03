@@ -4,9 +4,14 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
 
 import java.time.LocalDateTime;
 
+/**
+ * 对话附件实体，对应 chat_attachment 表。
+ */
+@Data
 @TableName("chat_attachment")
 public class ChatAttachmentEntity {
 
@@ -50,51 +55,4 @@ public class ChatAttachmentEntity {
     private LocalDateTime attachedAt;
     @TableField("expires_at")
     private LocalDateTime expiresAt;
-
-    public String getId() { return id; }
-    public void setId(String id) { this.id = id; }
-    public Long getUserId() { return userId; }
-    public void setUserId(Long userId) { this.userId = userId; }
-    public Long getConversationId() { return conversationId; }
-    public void setConversationId(Long conversationId) { this.conversationId = conversationId; }
-    public Long getMessageId() { return messageId; }
-    public void setMessageId(Long messageId) { this.messageId = messageId; }
-    public String getKind() { return kind; }
-    public void setKind(String kind) { this.kind = kind; }
-    public String getStatus() { return status; }
-    public void setStatus(String status) { this.status = status; }
-    public String getOriginalName() { return originalName; }
-    public void setOriginalName(String originalName) { this.originalName = originalName; }
-    public String getContentType() { return contentType; }
-    public void setContentType(String contentType) { this.contentType = contentType; }
-    public Long getFileSize() { return fileSize; }
-    public void setFileSize(Long fileSize) { this.fileSize = fileSize; }
-    public String getStorageProvider() { return storageProvider; }
-    public void setStorageProvider(String storageProvider) { this.storageProvider = storageProvider; }
-    public String getStoragePath() { return storagePath; }
-    public void setStoragePath(String storagePath) { this.storagePath = storagePath; }
-    public String getBucket() { return bucket; }
-    public void setBucket(String bucket) { this.bucket = bucket; }
-    public String getObjectKey() { return objectKey; }
-    public void setObjectKey(String objectKey) { this.objectKey = objectKey; }
-    public Integer getWidth() { return width; }
-    public void setWidth(Integer width) { this.width = width; }
-    public Integer getHeight() { return height; }
-    public void setHeight(Integer height) { this.height = height; }
-    public Integer getPosition() { return position; }
-    public void setPosition(Integer position) { this.position = position; }
-    public String getSourceType() { return sourceType; }
-    public void setSourceType(String sourceType) { this.sourceType = sourceType; }
-    public String getFolderGroupId() { return folderGroupId; }
-    public void setFolderGroupId(String folderGroupId) { this.folderGroupId = folderGroupId; }
-    public String getFolderRoot() { return folderRoot; }
-    public void setFolderRoot(String folderRoot) { this.folderRoot = folderRoot; }
-    public String getRelativePath() { return relativePath; }
-    public void setRelativePath(String relativePath) { this.relativePath = relativePath; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
-    public LocalDateTime getAttachedAt() { return attachedAt; }
-    public void setAttachedAt(LocalDateTime attachedAt) { this.attachedAt = attachedAt; }
-    public LocalDateTime getExpiresAt() { return expiresAt; }
-    public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }
 }

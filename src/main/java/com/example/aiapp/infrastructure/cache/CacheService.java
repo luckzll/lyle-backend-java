@@ -9,6 +9,9 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Redis 与本地降级缓存访问服务。
+ */
 @Component
 public class CacheService {
 

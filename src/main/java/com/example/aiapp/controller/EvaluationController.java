@@ -14,6 +14,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * AI 评测接口。
+ */
 @RestController
 @RequestMapping("/evaluation")
 public class EvaluationController {

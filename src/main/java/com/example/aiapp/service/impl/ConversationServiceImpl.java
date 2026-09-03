@@ -1,6 +1,6 @@
 package com.example.aiapp.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.aiapp.domain.dto.CreateConversationDTO;
 import com.example.aiapp.domain.dto.UpdateConversationDTO;
@@ -19,6 +19,9 @@ import java.util.List;
 
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
+/**
+ * 用户会话服务实现。
+ */
 @Service
 public class ConversationServiceImpl implements ConversationService {
 
@@ -59,12 +62,7 @@ public class ConversationServiceImpl implements ConversationService {
 
     @Override
     public PageVO<ConversationVO> page(Long userId, long page, long size) {
-        Page<ConversationEntity> result = conversationMapper.selectPage(
-                Page.of(page, size),
-                new LambdaQueryWrapper<ConversationEntity>()
-                        .eq(ConversationEntity::getUserId, userId)
-                        .orderByDesc(ConversationEntity::getUpdatedAt)
-        );
+        IPage<ConversationEntity> result = conversationMapper.selectPageByUserId(Page.of(page, size), userId);
         return new PageVO<>(
                 result.getRecords().stream().map(this::toVO).toList(),
                 result.getTotal(),

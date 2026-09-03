@@ -8,6 +8,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
 
+/**
+ * 产品体验分析接口。
+ */
 @RestController
 @RequestMapping("/experience")
 public class ExperienceController {

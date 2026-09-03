@@ -5,13 +5,14 @@ import com.example.aiapp.billing.BillingProperties;
 import com.example.aiapp.billing.BillingRequests;
 import com.example.aiapp.billing.payment.PaymentGateway;
 import com.example.aiapp.billing.payment.WechatPayPaymentGateway;
+import com.example.aiapp.domain.entity.BillingOrderEntity;
+import com.example.aiapp.mapper.BillingOrderMapper;
 import com.example.aiapp.service.BillingOrderQueryService;
 import com.example.aiapp.service.BillingPaymentService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -23,8 +24,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -37,13 +36,16 @@ import java.util.UUID;
 import static com.example.aiapp.billing.support.BillingIdentifiers.businessNo;
 import static com.example.aiapp.billing.support.BillingIdentifiers.nextId;
 
+/**
+ * 支付下单与回调处理服务实现。
+ */
 @Service
 public class BillingPaymentServiceImpl implements BillingPaymentService {
 
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
 
-    private final JdbcTemplate jdbcTemplate;
+    private final BillingOrderMapper billingOrderMapper;
     private final ObjectMapper objectMapper;
     private final BillingProperties properties;
     private final PaymentGateway paymentGateway;
@@ -51,14 +53,14 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
     private final BillingOrderQueryService orderQueryService;
 
     public BillingPaymentServiceImpl(
-            JdbcTemplate jdbcTemplate,
+            BillingOrderMapper billingOrderMapper,
             ObjectMapper objectMapper,
             BillingProperties properties,
             PaymentGateway paymentGateway,
             BillingMetrics metrics,
             BillingOrderQueryService orderQueryService
     ) {
-        this.jdbcTemplate = jdbcTemplate;
+        this.billingOrderMapper = billingOrderMapper;
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.paymentGateway = paymentGateway;
@@ -71,14 +73,14 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
     public Map<String, Object> createOrder(long userId, BillingRequests.CreateOrder request) {
         require(properties.catalogEnabled() && properties.userViewEnabled());
         String clientRequestId = safe(request.clientRequestId(), 128);
-        List<Map<String, Object>> existing = jdbcTemplate.queryForList(
-                "SELECT order_no FROM billing_order WHERE user_id = ? AND client_request_id = ?",
+        String existingOrderNo = billingOrderMapper.selectOrderNoByClientRequest(
                 userId,
-                clientRequestId
+                clientRequestId,
+                false
         );
-        if (!existing.isEmpty()) {
+        if (StringUtils.hasText(existingOrderNo)) {
             metrics.duplicatePrevented();
-            return orderQueryService.getOrder(userId, String.valueOf(existing.get(0).get("order_no")));
+            return orderQueryService.getOrder(userId, existingOrderNo);
         }
 
         Map<String, Object> price = requireSellablePrice(request.priceVersionCode());
@@ -128,48 +130,35 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
         LocalDateTime expiresAt = now.plusMinutes(Math.max(5, properties.orderTtlMinutes()));
         String orderNo = businessNo("L");
         try {
-            jdbcTemplate.update(
-                    """
-                    INSERT INTO billing_order (
-                        id, order_no, user_id, account_id, order_type, status,
-                        product_code, price_version_code, product_snapshot, currency,
-                        original_amount_minor, discount_amount_minor, payable_amount_minor,
-                        paid_amount_minor, client_request_id, expires_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, 'CREATED', ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?)
-                    """,
-                    nextId(),
-                    orderNo,
-                    userId,
-                    accountId,
-                    intent,
-                    price.get("product_code"),
-                    price.get("version_code"),
-                    json(snapshot),
-                    normalize(String.valueOf(price.get("currency"))),
-                    amountMinor,
-                    amountMinor,
-                    clientRequestId,
-                    expiresAt,
-                    now,
-                    now
-            );
+            BillingOrderEntity entity = new BillingOrderEntity();
+            entity.setId(nextId());
+            entity.setOrderNo(orderNo);
+            entity.setUserId(userId);
+            entity.setAccountId(accountId);
+            entity.setOrderType(intent);
+            entity.setStatus("CREATED");
+            entity.setProductCode(String.valueOf(price.get("product_code")));
+            entity.setPriceVersionCode(String.valueOf(price.get("version_code")));
+            entity.setProductSnapshot(json(snapshot));
+            entity.setCurrency(normalize(String.valueOf(price.get("currency"))));
+            entity.setOriginalAmountMinor(amountMinor);
+            entity.setDiscountAmountMinor(0L);
+            entity.setPayableAmountMinor(amountMinor);
+            entity.setPaidAmountMinor(0L);
+            entity.setClientRequestId(clientRequestId);
+            entity.setExpiresAt(expiresAt);
+            entity.setCreatedAt(now);
+            entity.setUpdatedAt(now);
+            billingOrderMapper.insert(entity);
         } catch (DataAccessException exception) {
-            List<Map<String, Object>> raced = jdbcTemplate.queryForList(
-                    """
-                    SELECT order_no
-                    FROM billing_order
-                    WHERE user_id = ? AND client_request_id = ?
-                    FOR UPDATE
-                    """,
+            String racedOrderNo = billingOrderMapper.selectOrderNoByClientRequest(
                     userId,
-                    clientRequestId
+                    clientRequestId,
+                    true
             );
-            if (!raced.isEmpty()) {
+            if (StringUtils.hasText(racedOrderNo)) {
                 metrics.duplicatePrevented();
-                return orderQueryService.getOrder(
-                        userId,
-                        String.valueOf(raced.get(0).get("order_no"))
-                );
+                return orderQueryService.getOrder(userId, racedOrderNo);
             }
             throw exception;
         }
@@ -249,28 +238,17 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
                 createPaymentCommand(order, paymentNo, orderExpiresAt)
         );
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                INSERT INTO payment_attempt (
-                    id, payment_no, order_id, provider, status, currency, amount_minor,
-                    expires_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?)
-                """,
+        billingOrderMapper.insertPaymentAttempt(
                 nextId(),
                 paymentNo,
-                order.get("id"),
+                number(order.get("id")),
                 result.provider(),
-                order.get("currency"),
-                order.get("payable_amount_minor"),
+                String.valueOf(order.get("currency")),
+                number(order.get("payable_amount_minor")),
                 result.expiresAt(),
-                now,
                 now
         );
-        jdbcTemplate.update(
-                "UPDATE billing_order SET status = 'PENDING_PAYMENT', updated_at = ? WHERE id = ?",
-                now,
-                order.get("id")
-        );
+        billingOrderMapper.markOrderPendingPayment(number(order.get("id")), now);
         order.put("status", "PENDING_PAYMENT");
         return checkoutResponse(order, currentPayment(number(order.get("id"))), result);
     }
@@ -367,29 +345,12 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
             throw conflict("订单状态不允许确认付款。");
         }
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                UPDATE payment_attempt
-                SET status = 'SUCCEEDED', provider_transaction_id = ?,
-                    succeeded_at = ?, updated_at = ?
-                WHERE id = ?
-                """,
+        billingOrderMapper.markPaymentSucceeded(
+                number(payment.get("id")),
                 safe(providerTransactionId, 128),
-                now,
-                now,
-                payment.get("id")
+                now
         );
-        jdbcTemplate.update(
-                """
-                UPDATE billing_order
-                SET status = 'PAID', paid_amount_minor = payable_amount_minor,
-                    paid_at = COALESCE(paid_at, ?), updated_at = ?
-                WHERE id = ? AND status IN ('CREATED', 'PENDING_PAYMENT', 'CLOSED', 'PAID')
-                """,
-                now,
-                now,
-                payment.get("order_id")
-        );
+        billingOrderMapper.markOrderPaid(number(payment.get("order_id")), now);
         metrics.orderPaid();
         enqueue(
                 "ORDER",
@@ -472,28 +433,18 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
                     String.valueOf(payload.get("currency")),
                     normalizedProvider
             );
-            jdbcTemplate.update(
-                    """
-                    UPDATE payment_webhook_event
-                    SET process_status = 'PROCESSED', processed_at = ?
-                    WHERE provider = ? AND provider_event_id = ?
-                    """,
-                    LocalDateTime.now(),
+            billingOrderMapper.updateWebhookProcessed(
                     normalizedProvider,
-                    eventId
+                    eventId,
+                    LocalDateTime.now()
             );
             return Map.of("status", "accepted", "duplicate", false);
         } catch (RuntimeException exception) {
-            jdbcTemplate.update(
-                    """
-                    UPDATE payment_webhook_event
-                    SET process_status = 'FAILED', processed_at = ?, error_code = ?
-                    WHERE provider = ? AND provider_event_id = ?
-                    """,
-                    LocalDateTime.now(),
-                    "VALIDATION_FAILED",
+            billingOrderMapper.updateWebhookFailed(
                     normalizedProvider,
-                    eventId
+                    eventId,
+                    LocalDateTime.now(),
+                    "VALIDATION_FAILED"
             );
             throw exception;
         }
@@ -542,25 +493,14 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
             } else if ("TRADE_CLOSED".equals(parameters.get("trade_status"))) {
                 markPaymentAndOrderClosed(payment);
             }
-            jdbcTemplate.update(
-                    """
-                    UPDATE payment_webhook_event
-                    SET process_status = 'PROCESSED', processed_at = ?
-                    WHERE provider = 'ALIPAY' AND provider_event_id = ?
-                    """,
-                    LocalDateTime.now(),
-                    eventId
-            );
+            billingOrderMapper.updateWebhookProcessed("ALIPAY", eventId, LocalDateTime.now());
             return true;
         } catch (RuntimeException exception) {
-            jdbcTemplate.update(
-                    """
-                    UPDATE payment_webhook_event
-                    SET process_status = 'FAILED', processed_at = ?, error_code = 'VALIDATION_FAILED'
-                    WHERE provider = 'ALIPAY' AND provider_event_id = ?
-                    """,
+            billingOrderMapper.updateWebhookFailed(
+                    "ALIPAY",
+                    eventId,
                     LocalDateTime.now(),
-                    eventId
+                    "VALIDATION_FAILED"
             );
             throw exception;
         }
@@ -612,25 +552,18 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
             } else if ("CLOSED".equals(status)) {
                 markPaymentAndOrderClosed(payment);
             }
-            jdbcTemplate.update(
-                    """
-                    UPDATE payment_webhook_event
-                    SET process_status = 'PROCESSED', processed_at = ?
-                    WHERE provider = 'WECHAT_PAY' AND provider_event_id = ?
-                    """,
-                    LocalDateTime.now(),
-                    notification.eventId()
+            billingOrderMapper.updateWebhookProcessed(
+                    "WECHAT_PAY",
+                    notification.eventId(),
+                    LocalDateTime.now()
             );
             return true;
         } catch (RuntimeException exception) {
-            jdbcTemplate.update(
-                    """
-                    UPDATE payment_webhook_event
-                    SET process_status = 'FAILED', processed_at = ?, error_code = 'VALIDATION_FAILED'
-                    WHERE provider = 'WECHAT_PAY' AND provider_event_id = ?
-                    """,
+            billingOrderMapper.updateWebhookFailed(
+                    "WECHAT_PAY",
+                    notification.eventId(),
                     LocalDateTime.now(),
-                    notification.eventId()
+                    "VALIDATION_FAILED"
             );
             throw exception;
         }
@@ -642,16 +575,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
         if (!properties.checkoutEnabled()) {
             return List.of();
         }
-        return jdbcTemplate.query(
-                """
-                SELECT order_no
-                FROM billing_order
-                WHERE status IN ('CREATED', 'PENDING_PAYMENT')
-                  AND expires_at <= CURRENT_TIMESTAMP(6)
-                ORDER BY expires_at
-                LIMIT ?
-                """,
-                (resultSet, rowNum) -> resultSet.getString(1),
+        return billingOrderMapper.selectExpiredPendingOrderNumbers(
                 Math.max(1, Math.min(limit, 100))
         );
     }
@@ -693,49 +617,18 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
     }
 
     private Map<String, Object> ensureAccount(long userId) {
-        List<Map<String, Object>> existing = jdbcTemplate.queryForList(
-                "SELECT * FROM commercial_account WHERE user_id = ?",
-                userId
-        );
-        if (!existing.isEmpty()) {
-            return existing.get(0);
+        Map<String, Object> existing = billingOrderMapper.selectAccountByUserId(userId, false);
+        if (existing != null) {
+            return existing;
         }
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                INSERT IGNORE INTO commercial_account (
-                    id, user_id, status, version, created_at, updated_at
-                ) VALUES (?, ?, 'ACTIVE', 0, ?, ?)
-                """,
-                nextId(),
-                userId,
-                now,
-                now
-        );
-        return jdbcTemplate.queryForMap(
-                "SELECT * FROM commercial_account WHERE user_id = ? FOR UPDATE",
-                userId
-        );
+        billingOrderMapper.insertAccountIgnore(nextId(), userId, now);
+        return billingOrderMapper.selectAccountByUserId(userId, true);
     }
 
     private Map<String, Object> currentPlan(long userId) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                """
-                SELECT o.order_no, o.product_snapshot, o.fulfilled_at,
-                       MAX(g.valid_from) AS valid_from, MAX(g.expires_at) AS expires_at
-                FROM billing_order o
-                JOIN entitlement_grant g ON g.source_type = 'ORDER' AND g.source_id = o.order_no
-                WHERE o.user_id = ? AND o.status IN ('FULFILLED', 'REFUNDING')
-                  AND g.status = 'ACTIVE'
-                  AND JSON_UNQUOTE(JSON_EXTRACT(o.product_snapshot, '$.productType')) = 'PLAN'
-                  AND (g.expires_at IS NULL OR g.expires_at > CURRENT_TIMESTAMP(6))
-                GROUP BY o.id, o.order_no, o.product_snapshot, o.fulfilled_at
-                ORDER BY expires_at DESC, o.fulfilled_at DESC
-                LIMIT 1
-                """,
-                userId
-        );
-        if (rows.isEmpty()) {
+        Map<String, Object> row = billingOrderMapper.selectCurrentPlan(userId);
+        if (row == null) {
             return Map.of(
                     "code", "FREE",
                     "name", "免费版",
@@ -743,7 +636,6 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
                     "benefits", List.of("基础聊天、记忆与免费 AI 额度")
             );
         }
-        Map<String, Object> row = rows.get(0);
         Map<String, Object> snapshot = jsonMap(row.get("product_snapshot"));
         Map<String, Object> plan = new LinkedHashMap<>();
         plan.put("code", snapshot.get("productCode"));
@@ -757,79 +649,51 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
     }
 
     private Map<String, Object> requireSellablePrice(String versionCode) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                """
-                SELECT v.*, p.product_code, p.product_type, p.display_name, p.description
-                FROM billing_price_version v
-                JOIN billing_product p ON p.id = v.product_id
-                WHERE v.version_code = ?
-                  AND v.status = 'PUBLISHED'
-                  AND p.status = 'ACTIVE'
-                  AND (v.sell_from IS NULL OR v.sell_from <= CURRENT_TIMESTAMP(6))
-                  AND (v.sell_until IS NULL OR v.sell_until > CURRENT_TIMESTAMP(6))
-                """,
+        Map<String, Object> row = billingOrderMapper.selectSellablePrice(
                 normalizeCode(versionCode, 64)
         );
-        if (rows.isEmpty()) {
+        if (row == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "价格已下架或暂不可售。");
         }
-        return rows.get(0);
+        return row;
     }
 
     private Map<String, Object> scopedOrder(long userId, String orderNo, boolean forUpdate) {
-        List<Map<String, Object>> rows = jdbcTemplate.query(
-                orderSelect() + """
-                WHERE o.order_no = ? AND o.user_id = ?
-                """ + (forUpdate ? " FOR UPDATE" : ""),
-                (resultSet, rowNum) -> orderDatabaseRow(resultSet),
+        Map<String, Object> row = billingOrderMapper.selectOrderForUser(
+                userId,
                 orderNo,
-                userId
+                forUpdate
         );
-        if (rows.isEmpty()) {
+        if (row == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
-        return rows.get(0);
+        return row;
     }
 
     private Map<String, Object> requireOrder(String orderNo, boolean forUpdate) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT * FROM billing_order WHERE order_no = ?" + (forUpdate ? " FOR UPDATE" : ""),
-                safe(orderNo, 64)
+        Map<String, Object> row = billingOrderMapper.selectOrderMapByOrderNo(
+                safe(orderNo, 64),
+                forUpdate
         );
-        if (rows.isEmpty()) {
+        if (row == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
-        return rows.get(0);
+        return row;
     }
 
     private Map<String, Object> requirePayment(String paymentNo, boolean forUpdate) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                """
-                SELECT p.*, o.order_no, o.status AS order_status, o.user_id, o.account_id
-                FROM payment_attempt p
-                JOIN billing_order o ON o.id = p.order_id
-                WHERE p.payment_no = ?
-                """ + (forUpdate ? " FOR UPDATE" : ""),
-                safe(paymentNo, 64)
+        Map<String, Object> row = billingOrderMapper.selectPaymentByPaymentNo(
+                safe(paymentNo, 64),
+                forUpdate
         );
-        if (rows.isEmpty()) {
+        if (row == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
-        return rows.get(0);
+        return row;
     }
 
     private Map<String, Object> currentPayment(long orderId) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                """
-                SELECT *
-                FROM payment_attempt
-                WHERE order_id = ?
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-                """,
-                orderId
-        );
-        return rows.isEmpty() ? null : rows.get(0);
+        return billingOrderMapper.selectLatestPaymentByOrderId(orderId);
     }
 
     private Map<String, Object> checkoutResponse(
@@ -867,26 +731,8 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
 
     private void markPaymentAndOrderClosed(Map<String, Object> payment) {
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                UPDATE payment_attempt
-                SET status = 'CLOSED', closed_at = ?, updated_at = ?
-                WHERE id = ? AND status IN ('INITIATED', 'PENDING')
-                """,
-                now,
-                now,
-                payment.get("id")
-        );
-        jdbcTemplate.update(
-                """
-                UPDATE billing_order
-                SET status = 'CLOSED', closed_at = ?, updated_at = ?
-                WHERE id = ? AND status IN ('CREATED', 'PENDING_PAYMENT')
-                """,
-                now,
-                now,
-                payment.get("order_id")
-        );
+        billingOrderMapper.markPaymentClosed(number(payment.get("id")), now);
+        billingOrderMapper.markOrderClosed(number(payment.get("order_id")), now);
     }
 
     private Map<String, Object> orderResponse(Map<String, Object> row) {
@@ -914,58 +760,6 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
         return response;
     }
 
-    private Map<String, Object> orderDatabaseRow(ResultSet resultSet) throws SQLException {
-        Map<String, Object> row = new LinkedHashMap<>();
-        row.put("id", resultSet.getLong("id"));
-        row.put("order_no", resultSet.getString("order_no"));
-        row.put("user_id", resultSet.getLong("user_id"));
-        row.put("account_id", resultSet.getLong("account_id"));
-        row.put("order_type", resultSet.getString("order_type"));
-        row.put("status", resultSet.getString("status"));
-        row.put("product_code", resultSet.getString("product_code"));
-        row.put("price_version_code", resultSet.getString("price_version_code"));
-        row.put("product_snapshot", resultSet.getString("product_snapshot"));
-        row.put("currency", resultSet.getString("currency"));
-        row.put("original_amount_minor", resultSet.getLong("original_amount_minor"));
-        row.put("discount_amount_minor", resultSet.getLong("discount_amount_minor"));
-        row.put("payable_amount_minor", resultSet.getLong("payable_amount_minor"));
-        row.put("paid_amount_minor", resultSet.getLong("paid_amount_minor"));
-        row.put("client_request_id", resultSet.getString("client_request_id"));
-        row.put("expires_at", localDateTime(resultSet.getObject("expires_at")));
-        row.put("paid_at", localDateTime(resultSet.getObject("paid_at")));
-        row.put("fulfilled_at", localDateTime(resultSet.getObject("fulfilled_at")));
-        row.put("closed_at", localDateTime(resultSet.getObject("closed_at")));
-        row.put("created_at", localDateTime(resultSet.getObject("created_at")));
-        row.put("updated_at", localDateTime(resultSet.getObject("updated_at")));
-        try {
-            row.put("payment_no", resultSet.getString("payment_no"));
-            row.put("payment_status", resultSet.getString("payment_status"));
-            row.put("payment_provider", resultSet.getString("payment_provider"));
-            row.put("refund_status", resultSet.getString("refund_status"));
-            row.put("refund_succeeded_at", localDateTime(resultSet.getObject("refund_succeeded_at")));
-        } catch (SQLException ignored) {
-            // Internal locking queries intentionally may select only the order table.
-        }
-        return row;
-    }
-
-    private String orderSelect() {
-        return """
-                SELECT o.*,
-                       (SELECT p.payment_no FROM payment_attempt p
-                        WHERE p.order_id = o.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS payment_no,
-                       (SELECT p.status FROM payment_attempt p
-                        WHERE p.order_id = o.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS payment_status,
-                       (SELECT p.provider FROM payment_attempt p
-                        WHERE p.order_id = o.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS payment_provider,
-                       (SELECT r.status FROM refund_order r
-                        WHERE r.order_id = o.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS refund_status,
-                       (SELECT r.succeeded_at FROM refund_order r
-                        WHERE r.order_id = o.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS refund_succeeded_at
-                FROM billing_order o
-                """;
-    }
-
     private void enqueue(
             String aggregateType,
             String aggregateId,
@@ -974,20 +768,13 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
             Map<String, Object> payload
     ) {
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                INSERT IGNORE INTO billing_outbox (
-                    id, aggregate_type, aggregate_id, event_type, event_version,
-                    payload_json, status, retry_count, next_attempt_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
-                """,
+        billingOrderMapper.insertOutbox(
                 nextId(),
                 normalize(aggregateType),
                 safe(aggregateId, 128),
                 normalize(eventType),
                 version,
                 json(payload),
-                now,
                 now
         );
     }
@@ -1001,13 +788,7 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
             String paymentNo,
             String error
     ) {
-        return jdbcTemplate.update(
-                """
-                INSERT IGNORE INTO payment_webhook_event (
-                    id, provider, provider_event_id, payload_hash, signature_valid,
-                    process_status, payment_no, received_at, error_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+        return billingOrderMapper.insertWebhook(
                 nextId(),
                 safe(provider, 32),
                 safe(eventId, 128),
@@ -1022,26 +803,8 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
 
     private void closeExpiredOrder(long orderId) {
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                UPDATE billing_order
-                SET status = 'CLOSED', closed_at = ?, updated_at = ?
-                WHERE id = ? AND status IN ('CREATED', 'PENDING_PAYMENT')
-                """,
-                now,
-                now,
-                orderId
-        );
-        jdbcTemplate.update(
-                """
-                UPDATE payment_attempt
-                SET status = 'CLOSED', closed_at = ?, updated_at = ?
-                WHERE order_id = ? AND status IN ('INITIATED', 'PENDING')
-                """,
-                now,
-                now,
-                orderId
-        );
+        billingOrderMapper.markOrderClosed(orderId, now);
+        billingOrderMapper.closePaymentsByOrder(orderId, now);
     }
 
     private Map<String, Object> amount(String currency, long payable, long paid) {

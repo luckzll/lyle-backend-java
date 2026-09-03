@@ -7,6 +7,9 @@ import com.example.aiapp.domain.vo.PageVO;
 
 import java.util.List;
 
+/**
+ * 用户会话服务。
+ */
 public interface ConversationService {
 
     ConversationVO create(Long userId, CreateConversationDTO request);

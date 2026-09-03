@@ -7,6 +7,9 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
+/**
+ * 知识库文件服务。
+ */
 public interface FileService {
 
     FileUploadVO upload(Long userId, Long knowledgeBaseId, MultipartFile file);

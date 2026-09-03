@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.CommercialAccountMapper">
+
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.CommercialAccountEntity">
+        <id column="id" property="id"/>
+        <result column="user_id" property="userId"/>
+        <result column="status" property="status"/>
+        <result column="version" property="version"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, user_id, status, version, created_at, updated_at
+    </sql>
+
+    <!-- 商业账户与额度概览 -->
+    <select id="selectAccountByUserId" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM commercial_account
+        WHERE user_id = #{userId}
+        <if test="forUpdate">FOR UPDATE</if>
+    </select>
+    <insert id="insertAccountIgnore">
+        INSERT IGNORE INTO commercial_account (id, user_id, status, version, created_at, updated_at)
+        VALUES (#{id}, #{userId}, 'ACTIVE', 0, #{createdAt}, #{createdAt})
+    </insert>
+    <select id="lockAccountById" resultType="java.lang.Long">
+        SELECT id FROM commercial_account WHERE id = #{accountId} FOR UPDATE
+    </select>
+    <select id="sumGrantedCredits" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(quantity_micros), 0) FROM entitlement_grant WHERE account_id = #{accountId}
+    </select>
+    <select id="sumConsumedCredits" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(credit_micros), 0) FROM commercial_ledger_entry
+        WHERE account_id = #{accountId} AND entry_type = 'USAGE_DEBIT'
+    </select>
+    <select id="sumAvailableCredits" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(remaining_micros), 0) FROM entitlement_grant
+        WHERE account_id = #{accountId} AND status = 'ACTIVE' AND remaining_micros &gt; 0
+          AND valid_from &lt;= CURRENT_TIMESTAMP(6)
+          AND (expires_at IS NULL OR expires_at &gt; CURRENT_TIMESTAMP(6))
+    </select>
+    <select id="selectNextExpiryAt" resultType="java.time.LocalDateTime">
+        SELECT MIN(expires_at) FROM entitlement_grant
+        WHERE account_id = #{accountId} AND status = 'ACTIVE' AND remaining_micros &gt; 0
+          AND expires_at IS NOT NULL AND expires_at &gt; CURRENT_TIMESTAMP(6)
+    </select>
+    <select id="selectLedger" resultType="java.util.LinkedHashMap">
+        SELECT e.id, e.entry_type, e.direction, e.credit_micros, e.balance_after_micros,
+               e.source_type, e.source_id, e.occurred_at, e.expires_at, e.metadata_json
+        FROM commercial_ledger_entry e WHERE e.account_id = #{accountId}
+        <if test="entryType != null and entryType != ''">AND e.entry_type = #{entryType}</if>
+        ORDER BY e.occurred_at DESC, e.id DESC LIMIT #{limit}
+    </select>
+
+    <!-- 履约任务与额度过期 -->
+    <select id="selectPendingFulfillmentOrders" resultType="java.lang.String">
+        SELECT aggregate_id FROM billing_outbox
+        WHERE event_type = 'FULFILL_ORDER' AND status IN ('PENDING', 'RETRY')
+          AND next_attempt_at &lt;= CURRENT_TIMESTAMP(6)
+        ORDER BY created_at LIMIT #{limit}
+    </select>
+    <select id="selectExpiredGrantIds" resultType="java.lang.Long">
+        SELECT id FROM entitlement_grant
+        WHERE status = 'ACTIVE' AND remaining_micros &gt; 0
+          AND expires_at IS NOT NULL AND expires_at &lt;= CURRENT_TIMESTAMP(6)
+        ORDER BY expires_at LIMIT #{limit}
+    </select>
+    <select id="selectGrantById" resultType="java.util.LinkedHashMap">
+        SELECT * FROM entitlement_grant WHERE id = #{grantId}
+        <if test="forUpdate">FOR UPDATE</if>
+    </select>
+    <update id="expireGrant">
+        UPDATE entitlement_grant SET status = 'EXPIRED', remaining_micros = 0, updated_at = #{updatedAt}
+        WHERE id = #{grantId}
+    </update>
+    <insert id="insertExpirationLedger">
+        INSERT IGNORE INTO commercial_ledger_entry (
+            id, account_id, grant_id, entry_type, direction, credit_micros,
+            balance_after_micros, source_type, source_id, idempotency_key,
+            occurred_at, expires_at, metadata_json, created_at
+        ) VALUES (
+            #{id}, #{accountId}, #{grantId}, 'EXPIRATION', 'DEBIT', #{creditMicros},
+            #{balanceAfterMicros}, 'GRANT', #{sourceId}, #{idempotencyKey},
+            #{occurredAt}, #{expiresAt}, #{metadataJson}, #{occurredAt}
+        )
+    </insert>
+    <select id="selectOrderByOrderNo" resultType="java.util.LinkedHashMap">
+        SELECT * FROM billing_order WHERE order_no = #{orderNo}
+        <if test="forUpdate">FOR UPDATE</if>
+    </select>
+    <update id="markOrderFulfilling">
+        UPDATE billing_order SET status = 'FULFILLING', updated_at = #{updatedAt} WHERE id = #{orderId}
+    </update>
+    <update id="markOrderFulfilled">
+        UPDATE billing_order SET status = 'FULFILLED',
+            fulfilled_at = COALESCE(fulfilled_at, #{fulfilledAt}), updated_at = #{fulfilledAt}
+        WHERE id = #{orderId}
+    </update>
+    <update id="markOutboxProcessed">
+        UPDATE billing_outbox SET status = 'PROCESSED', processed_at = #{processedAt}, last_error = NULL
+        WHERE aggregate_type = 'ORDER' AND aggregate_id = #{aggregateId} AND event_type = #{eventType}
+    </update>
+    <update id="markFulfillmentFailed">
+        UPDATE billing_outbox
+        SET status = CASE WHEN retry_count &gt;= 9 THEN 'DEAD' ELSE 'RETRY' END,
+            retry_count = retry_count + 1,
+            next_attempt_at = DATE_ADD(CURRENT_TIMESTAMP(6),
+                INTERVAL LEAST(3600, POW(2, retry_count + 1)) SECOND),
+            last_error = #{lastError}
+        WHERE aggregate_type = 'ORDER' AND aggregate_id = #{orderNo}
+          AND event_type = 'FULFILL_ORDER' AND status &lt;&gt; 'PROCESSED'
+    </update>
+
+    <!-- 额度预留与用量结算 -->
+    <select id="sumActiveReservationCredits" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(reserved_credit_micros - consumed_credit_micros), 0)
+        FROM commercial_reservation
+        WHERE account_id = #{accountId} AND status = 'ACTIVE' AND expires_at &gt; CURRENT_TIMESTAMP(6)
+    </select>
+    <insert id="insertReservation">
+        INSERT INTO commercial_reservation (
+            id, account_id, user_id, turn_id, reserved_credit_micros,
+            consumed_credit_micros, status, expires_at, created_at, updated_at
+        ) VALUES (#{id}, #{accountId}, #{userId}, #{turnId}, #{reservedCreditMicros},
+                  0, 'ACTIVE', #{expiresAt}, #{createdAt}, #{createdAt})
+    </insert>
+    <update id="releaseReservation">
+        UPDATE commercial_reservation SET status = 'RELEASED', updated_at = #{updatedAt}
+        WHERE id = #{id} AND status = 'ACTIVE'
+    </update>
+    <insert id="insertBillableUsage">
+        INSERT IGNORE INTO billable_usage (
+            id, usage_event_id, user_id, account_id, pricing_version_code,
+            charge_credit_micros, usage_source, status, reservation_id, metadata_json, created_at
+        ) VALUES (#{id}, #{usageEventId}, #{userId}, #{accountId}, #{pricingVersionCode},
+                  #{chargeCreditMicros}, #{usageSource}, #{status}, #{reservationId},
+                  #{metadataJson}, #{createdAt})
+    </insert>
+    <update id="markUsageShadowSettled">
+        UPDATE billable_usage SET settled_at = #{settledAt} WHERE usage_event_id = #{usageEventId}
+    </update>
+    <update id="markUsageInsufficient">
+        UPDATE billable_usage SET status = 'INSUFFICIENT', settled_at = #{settledAt}
+        WHERE usage_event_id = #{usageEventId}
+    </update>
+    <update id="markUsageSettled">
+        UPDATE billable_usage SET status = 'SETTLED', ledger_entry_id = #{ledgerEntryId},
+            settled_at = #{settledAt} WHERE usage_event_id = #{usageEventId}
+    </update>
+    <update id="settleReservation">
+        UPDATE commercial_reservation
+        SET consumed_credit_micros = LEAST(reserved_credit_micros,
+                consumed_credit_micros + #{chargeCreditMicros}),
+            status = 'SETTLED', updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+    <select id="selectPendingUsageEventIds" resultType="java.lang.String">
+        SELECT e.event_id FROM ai_usage_event e
+        LEFT JOIN billable_usage b ON b.usage_event_id = e.event_id
+        WHERE b.usage_event_id IS NULL AND e.status = 'SUCCEEDED'
+        ORDER BY e.received_at LIMIT #{limit}
+    </select>
+    <select id="selectUsageEvent" resultType="java.util.LinkedHashMap">
+        SELECT * FROM ai_usage_event WHERE event_id = #{eventId}
+    </select>
+
+    <!-- 商业计价规则 -->
+    <select id="selectUsagePricingByVersion" resultType="java.util.LinkedHashMap">
+        SELECT * FROM billing_usage_pricing_version WHERE version_code = #{versionCode}
+    </select>
+    <insert id="insertUsagePricing">
+        INSERT INTO billing_usage_pricing_version (
+            id, version_code, rules_json, status, effective_from,
+            effective_until, created_at, published_at
+        ) VALUES (#{id}, #{versionCode}, #{rulesJson}, 'PUBLISHED', #{effectiveFrom},
+                  #{effectiveUntil}, #{createdAt}, #{createdAt})
+    </insert>
+    <select id="selectUsagePricingById" resultType="java.util.LinkedHashMap">
+        SELECT * FROM billing_usage_pricing_version WHERE id = #{id}
+    </select>
+
+    <!-- 额度授予、扣减与流水 -->
+    <insert id="insertGrant">
+        INSERT IGNORE INTO entitlement_grant (
+            id, account_id, grant_type, source_type, source_id, entitlement_code,
+            price_version_code, quantity_micros, remaining_micros, valid_from,
+            expires_at, status, metadata_json, created_at, updated_at
+        ) VALUES (#{id}, #{accountId}, #{grantType}, #{sourceType}, #{sourceId},
+                  #{entitlementCode}, #{priceVersionCode}, #{quantityMicros}, #{quantityMicros},
+                  #{validFrom}, #{expiresAt}, 'ACTIVE', #{metadataJson}, #{createdAt}, #{createdAt})
+    </insert>
+    <insert id="insertCreditLedger">
+        INSERT IGNORE INTO commercial_ledger_entry (
+            id, account_id, grant_id, entry_type, direction, credit_micros,
+            balance_after_micros, source_type, source_id, idempotency_key,
+            occurred_at, expires_at, metadata_json, created_at
+        ) VALUES (#{id}, #{accountId}, #{grantId}, #{entryType}, 'CREDIT', #{creditMicros},
+                  #{balanceAfterMicros}, #{sourceType}, #{sourceId}, #{idempotencyKey},
+                  #{occurredAt}, #{expiresAt}, #{metadataJson}, #{occurredAt})
+    </insert>
+    <select id="selectSpendableGrantsForUpdate" resultType="java.util.LinkedHashMap">
+        SELECT id, remaining_micros, expires_at FROM entitlement_grant
+        WHERE account_id = #{accountId} AND status = 'ACTIVE' AND remaining_micros &gt; 0
+          AND valid_from &lt;= CURRENT_TIMESTAMP(6)
+          AND (expires_at IS NULL OR expires_at &gt; CURRENT_TIMESTAMP(6))
+        ORDER BY CASE WHEN expires_at IS NULL THEN 1 ELSE 0 END, expires_at, created_at, id
+        FOR UPDATE
+    </select>
+    <update id="decrementGrant">
+        UPDATE entitlement_grant SET remaining_micros = remaining_micros - #{creditMicros},
+            updated_at = #{updatedAt}
+        WHERE id = #{grantId} AND remaining_micros &gt;= #{creditMicros}
+    </update>
+    <insert id="insertUsageDebitLedger">
+        INSERT INTO commercial_ledger_entry (
+            id, account_id, grant_id, entry_type, direction, credit_micros,
+            balance_after_micros, source_type, source_id, idempotency_key,
+            occurred_at, expires_at, metadata_json, created_at
+        ) VALUES (#{id}, #{accountId}, #{grantId}, 'USAGE_DEBIT', 'DEBIT', #{creditMicros},
+                  #{balanceAfterMicros}, 'USAGE_EVENT', #{usageEventId}, #{idempotencyKey},
+                  #{occurredAt}, #{expiresAt}, #{metadataJson}, #{occurredAt})
+    </insert>
+
+    <!-- 当前套餐、计价规则与预留查询 -->
+    <select id="selectCurrentPlan" resultType="java.util.LinkedHashMap">
+        SELECT o.order_no, o.product_snapshot, o.fulfilled_at,
+               MAX(g.valid_from) AS valid_from, MAX(g.expires_at) AS expires_at
+        FROM billing_order o INNER JOIN entitlement_grant g
+          ON g.source_type = 'ORDER' AND g.source_id = o.order_no
+        WHERE o.user_id = #{userId} AND o.status IN ('FULFILLED', 'REFUNDING')
+          AND g.status = 'ACTIVE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(o.product_snapshot, '$.productType')) = 'PLAN'
+          AND (g.expires_at IS NULL OR g.expires_at &gt; CURRENT_TIMESTAMP(6))
+        GROUP BY o.id, o.order_no, o.product_snapshot, o.fulfilled_at
+        ORDER BY expires_at DESC, o.fulfilled_at DESC LIMIT 1
+    </select>
+    <select id="selectLatestPlanExpiry" resultType="java.time.LocalDateTime">
+        SELECT MAX(g.expires_at) FROM entitlement_grant g
+        INNER JOIN billing_order o ON o.order_no = g.source_id AND g.source_type = 'ORDER'
+        WHERE g.account_id = #{accountId} AND g.status = 'ACTIVE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(o.product_snapshot, '$.productType')) = 'PLAN'
+    </select>
+    <select id="selectActiveUsagePricing" resultType="java.util.LinkedHashMap">
+        SELECT version_code, rules_json FROM billing_usage_pricing_version
+        WHERE status = 'PUBLISHED' AND effective_from &lt;= CURRENT_TIMESTAMP(6)
+          AND (effective_until IS NULL OR effective_until &gt; CURRENT_TIMESTAMP(6))
+        ORDER BY effective_from DESC, id DESC LIMIT 1
+    </select>
+    <select id="selectActiveReservationId" resultType="java.lang.String">
+        SELECT id FROM commercial_reservation
+        WHERE user_id = #{userId} AND turn_id = #{turnId} AND status = 'ACTIVE'
+          AND expires_at &gt; CURRENT_TIMESTAMP(6)
+        ORDER BY created_at DESC LIMIT 1
+    </select>
+
+</mapper>

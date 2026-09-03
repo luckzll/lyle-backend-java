@@ -7,6 +7,9 @@ import com.example.aiapp.domain.vo.ChatResponseVO;
 import java.util.List;
 import java.util.function.Consumer;
 
+/**
+ * AI 对话编排服务。
+ */
 public interface ChatService {
 
     ChatResponseVO send(Long userId, ChatRequestDTO request);

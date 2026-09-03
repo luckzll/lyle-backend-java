@@ -8,6 +8,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 向量数据库读写服务。
+ */
 @Component
 public class VectorStoreService {
 

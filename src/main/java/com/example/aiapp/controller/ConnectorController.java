@@ -12,6 +12,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 外部连接器接口。
+ */
 @RestController
 @RequestMapping("/connectors")
 public class ConnectorController {

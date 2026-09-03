@@ -6,6 +6,9 @@ import com.example.aiapp.domain.vo.PageVO;
 
 import java.util.List;
 
+/**
+ * 用户知识库服务。
+ */
 public interface KnowledgeBaseService {
 
     KnowledgeBaseVO create(Long userId, CreateKnowledgeBaseDTO request);

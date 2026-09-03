@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.PaymentWebhookEventMapper">
+
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.PaymentWebhookEventEntity">
+        <id column="id" property="id"/>
+        <result column="provider" property="provider"/>
+        <result column="provider_event_id" property="providerEventId"/>
+        <result column="payload_hash" property="payloadHash"/>
+        <result column="signature_valid" property="signatureValid"/>
+        <result column="process_status" property="processStatus"/>
+        <result column="payment_no" property="paymentNo"/>
+        <result column="received_at" property="receivedAt"/>
+        <result column="processed_at" property="processedAt"/>
+        <result column="error_code" property="errorCode"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, provider, provider_event_id, payload_hash, signature_valid, process_status, payment_no, received_at, processed_at, error_code
+    </sql>
+
+    <!-- MyBatis-Plus 通用 CRUD 由 BaseMapper 提供；自定义 SQL 在此文件扩展。 -->
+
+</mapper>

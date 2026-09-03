@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.PaymentAttemptMapper">
+
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.PaymentAttemptEntity">
+        <id column="id" property="id"/>
+        <result column="payment_no" property="paymentNo"/>
+        <result column="order_id" property="orderId"/>
+        <result column="provider" property="provider"/>
+        <result column="status" property="status"/>
+        <result column="currency" property="currency"/>
+        <result column="amount_minor" property="amountMinor"/>
+        <result column="provider_transaction_id" property="providerTransactionId"/>
+        <result column="checkout_payload_encrypted" property="checkoutPayloadEncrypted"/>
+        <result column="expires_at" property="expiresAt"/>
+        <result column="succeeded_at" property="succeededAt"/>
+        <result column="closed_at" property="closedAt"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, payment_no, order_id, provider, status, currency, amount_minor, provider_transaction_id, checkout_payload_encrypted, expires_at, succeeded_at, closed_at, created_at, updated_at
+    </sql>
+
+    <!-- MyBatis-Plus 通用 CRUD 由 BaseMapper 提供；自定义 SQL 在此文件扩展。 -->
+
+</mapper>

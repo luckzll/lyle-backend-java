@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.PaymentReconciliationItemMapper">
+
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.PaymentReconciliationItemEntity">
+        <id column="id" property="id"/>
+        <result column="reconciliation_date" property="reconciliationDate"/>
+        <result column="provider" property="provider"/>
+        <result column="payment_no" property="paymentNo"/>
+        <result column="provider_transaction_id" property="providerTransactionId"/>
+        <result column="internal_amount_minor" property="internalAmountMinor"/>
+        <result column="provider_amount_minor" property="providerAmountMinor"/>
+        <result column="internal_status" property="internalStatus"/>
+        <result column="provider_status" property="providerStatus"/>
+        <result column="difference_type" property="differenceType"/>
+        <result column="process_status" property="processStatus"/>
+        <result column="assignee_user_id" property="assigneeUserId"/>
+        <result column="note" property="note"/>
+        <result column="resolved_at" property="resolvedAt"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, reconciliation_date, provider, payment_no, provider_transaction_id, internal_amount_minor, provider_amount_minor, internal_status, provider_status, difference_type, process_status, assignee_user_id, note, resolved_at, created_at, updated_at
+    </sql>
+
+    <select id="selectRecent" resultType="java.util.LinkedHashMap">
+        SELECT *
+        FROM payment_reconciliation_item
+        <where>
+            <if test="status != null">
+                process_status = #{status}
+            </if>
+        </where>
+        ORDER BY reconciliation_date DESC, created_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectPaymentsForReconciliation" resultType="java.util.LinkedHashMap">
+        SELECT payment_no, provider_transaction_id, amount_minor, status
+        FROM payment_attempt
+        WHERE provider = #{provider}
+          AND created_at &gt;= #{start}
+          AND created_at &lt; #{end}
+    </select>
+
+    <update id="resolveItem">
+        UPDATE payment_reconciliation_item
+        SET process_status = 'RESOLVED',
+            assignee_user_id = #{operatorUserId},
+            note = #{note},
+            resolved_at = #{resolvedAt},
+            updated_at = #{resolvedAt}
+        WHERE id = #{id}
+    </update>
+
+    <select id="selectMapById" resultType="java.util.LinkedHashMap">
+        SELECT *
+        FROM payment_reconciliation_item
+        WHERE id = #{id}
+    </select>
+
+    <insert id="upsertItem">
+        INSERT INTO payment_reconciliation_item (
+            id, reconciliation_date, provider, payment_no, provider_transaction_id,
+            internal_amount_minor, provider_amount_minor, internal_status,
+            provider_status, difference_type, process_status, created_at, updated_at
+        ) VALUES (
+            #{id}, #{reconciliationDate}, #{provider}, #{paymentNo}, #{providerTransactionId},
+            #{internalAmountMinor}, #{providerAmountMinor}, #{internalStatus},
+            #{providerStatus}, #{differenceType}, #{processStatus}, #{createdAt}, #{updatedAt}
+        )
+        ON DUPLICATE KEY UPDATE
+            internal_amount_minor = VALUES(internal_amount_minor),
+            provider_amount_minor = VALUES(provider_amount_minor),
+            internal_status = VALUES(internal_status),
+            provider_status = VALUES(provider_status),
+            process_status = VALUES(process_status),
+            updated_at = VALUES(updated_at)
+    </insert>
+
+</mapper>
