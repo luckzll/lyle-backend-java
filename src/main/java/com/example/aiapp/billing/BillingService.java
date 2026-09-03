@@ -102,6 +102,11 @@ public class BillingService {
     }
 
     @Transactional
+    public void deleteOrder(long userId, String orderNo) {
+        paymentService.deleteOrder(userId, orderNo);
+    }
+
+    @Transactional
     public Map<String, Object> confirmMockPayment(String paymentNo) {
         return paymentService.confirmMockPayment(paymentNo);
     }

@@ -19,6 +19,8 @@ public interface BillingPaymentService {
 
     Map<String, Object> closeOrder(long userId, String orderNo);
 
+    void deleteOrder(long userId, String orderNo);
+
     Map<String, Object> confirmMockPayment(String paymentNo);
 
     void confirmPayment(

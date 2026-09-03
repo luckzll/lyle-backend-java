@@ -129,12 +129,19 @@ public class AlipayPaymentGateway implements PaymentGateway {
             model.setOutTradeNo(paymentNo);
             request.setBizModel(model);
             AlipayTradeCloseResponse response = client().execute(request);
-            return response.isSuccess()
-                    ? new PaymentResult("CLOSED", response.getTradeNo())
-                    : new PaymentResult("UNKNOWN", response.getTradeNo());
+            return new PaymentResult(
+                    closeStatus(response.isSuccess(), response.getSubCode()),
+                    response.getTradeNo()
+            );
         } catch (AlipayApiException exception) {
             return new PaymentResult("UNKNOWN", null);
         }
+    }
+
+    static String closeStatus(boolean success, String subCode) {
+        return success || "ACQ.TRADE_NOT_EXIST".equalsIgnoreCase(subCode)
+                ? "CLOSED"
+                : "UNKNOWN";
     }
 
     @Override

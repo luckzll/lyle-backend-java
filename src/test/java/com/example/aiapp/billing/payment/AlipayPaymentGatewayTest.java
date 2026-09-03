@@ -17,4 +17,11 @@ class AlipayPaymentGatewayTest {
                 AlipayPaymentGateway.formatAlipayTime(expiresAtUtc)
         );
     }
+
+    @Test
+    void treatsMissingProviderTradeAsSafelyClosed() {
+        assertEquals("CLOSED", AlipayPaymentGateway.closeStatus(false, "ACQ.TRADE_NOT_EXIST"));
+        assertEquals("CLOSED", AlipayPaymentGateway.closeStatus(true, null));
+        assertEquals("UNKNOWN", AlipayPaymentGateway.closeStatus(false, "SYSTEM_ERROR"));
+    }
 }
