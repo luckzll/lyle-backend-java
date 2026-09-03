@@ -51,6 +51,8 @@ public class BillingOrderEntity {
     private LocalDateTime fulfilledAt;
     @TableField("closed_at")
     private LocalDateTime closedAt;
+    @TableField("user_hidden_at")
+    private LocalDateTime userHiddenAt;
     @TableField("created_at")
     private LocalDateTime createdAt;
     @TableField("updated_at")

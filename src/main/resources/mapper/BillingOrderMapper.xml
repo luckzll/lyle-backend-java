@@ -23,12 +23,13 @@
         <result column="paid_at" property="paidAt"/>
         <result column="fulfilled_at" property="fulfilledAt"/>
         <result column="closed_at" property="closedAt"/>
+        <result column="user_hidden_at" property="userHiddenAt"/>
         <result column="created_at" property="createdAt"/>
         <result column="updated_at" property="updatedAt"/>
     </resultMap>
 
     <sql id="Base_Column_List">
-        id, order_no, user_id, account_id, order_type, status, product_code, price_version_code, product_snapshot, currency, original_amount_minor, discount_amount_minor, payable_amount_minor, paid_amount_minor, client_request_id, expires_at, paid_at, fulfilled_at, closed_at, created_at, updated_at
+        id, order_no, user_id, account_id, order_type, status, product_code, price_version_code, product_snapshot, currency, original_amount_minor, discount_amount_minor, payable_amount_minor, paid_amount_minor, client_request_id, expires_at, paid_at, fulfilled_at, closed_at, user_hidden_at, created_at, updated_at
     </sql>
 
     <!-- 显式维护数据库字段与订单读取对象的映射，避免依赖隐式驼峰转换。 -->
@@ -101,6 +102,7 @@
         FROM billing_order o
         <include refid="billingOrderLatestRelations"/>
         WHERE o.user_id = #{userId}
+          AND o.user_hidden_at IS NULL
         ORDER BY o.created_at DESC
         LIMIT #{limit}
     </select>
@@ -114,6 +116,7 @@
         <include refid="billingOrderLatestRelations"/>
         WHERE o.order_no = #{orderNo}
           AND o.user_id = #{userId}
+          AND o.user_hidden_at IS NULL
     </select>
 
     <select id="selectOrderNoByClientRequest" resultType="java.lang.String">
@@ -248,6 +251,7 @@
         <include refid="billingOrderLatestRelations"/>
         WHERE o.order_no = #{orderNo}
           AND o.user_id = #{userId}
+          AND o.user_hidden_at IS NULL
         <if test="forUpdate">
             FOR UPDATE
         </if>
@@ -292,6 +296,15 @@
         SET status = 'CLOSED', closed_at = #{closedAt}, updated_at = #{closedAt}
         WHERE id = #{orderId}
           AND status IN ('CREATED', 'PENDING_PAYMENT')
+    </update>
+
+    <update id="markOrderHiddenForUser">
+        UPDATE billing_order
+        SET user_hidden_at = #{hiddenAt}, updated_at = #{hiddenAt}
+        WHERE id = #{orderId}
+          AND user_id = #{userId}
+          AND status IN ('CLOSED', 'CANCELLED')
+          AND user_hidden_at IS NULL
     </update>
 
     <insert id="insertOutbox">

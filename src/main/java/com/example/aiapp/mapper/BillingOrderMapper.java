@@ -125,6 +125,13 @@ public interface BillingOrderMapper extends BaseMapper<BillingOrderEntity> {
     /** 关闭尚未完成支付的订单。 */
     int markOrderClosed(@Param("orderId") long orderId, @Param("closedAt") LocalDateTime closedAt);
 
+    /** 从用户账单列表隐藏已关闭订单，保留支付与审计记录。 */
+    int markOrderHiddenForUser(
+            @Param("orderId") long orderId,
+            @Param("userId") long userId,
+            @Param("hiddenAt") LocalDateTime hiddenAt
+    );
+
     /** 幂等写入计费发件箱事件。 */
     int insertOutbox(
             @Param("id") long id,

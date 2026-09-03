@@ -29,14 +29,19 @@ class BillingControllerTest {
         when(service.account(42L)).thenReturn(Map.of("availableCreditMicros", 10L));
         when(service.orders(42L, 20)).thenReturn(List.of(Map.of("orderNo", "L-42")));
         when(service.order(42L, "L-42")).thenReturn(Map.of("orderNo", "L-42"));
+        when(service.closeOrder(42L, "L-42")).thenReturn(Map.of("orderNo", "L-42", "status", "CLOSED"));
 
         assertThat(controller.account()).containsEntry("availableCreditMicros", 10L);
         assertThat(controller.orders(20)).containsExactly(Map.of("orderNo", "L-42"));
         assertThat(controller.order("L-42")).containsEntry("orderNo", "L-42");
+        assertThat(controller.close("L-42")).containsEntry("status", "CLOSED");
+        controller.delete("L-42");
 
         verify(service).account(42L);
         verify(service).orders(42L, 20);
         verify(service).order(42L, "L-42");
+        verify(service).closeOrder(42L, "L-42");
+        verify(service).deleteOrder(42L, "L-42");
     }
 
     @Test

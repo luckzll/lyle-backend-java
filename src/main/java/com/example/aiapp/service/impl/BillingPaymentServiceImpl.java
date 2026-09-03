@@ -292,6 +292,24 @@ public class BillingPaymentServiceImpl implements BillingPaymentService {
 
     @Override
     @Transactional
+    public void deleteOrder(long userId, String orderNo) {
+        Map<String, Object> order = scopedOrder(userId, safe(orderNo, 64), true);
+        String status = normalize(String.valueOf(order.get("status")));
+        if (!List.of("CLOSED", "CANCELLED").contains(status)) {
+            throw conflict("请先取消待支付订单；已支付订单不能删除。");
+        }
+        int updated = billingOrderMapper.markOrderHiddenForUser(
+                number(order.get("id")),
+                userId,
+                LocalDateTime.now()
+        );
+        if (updated != 1) {
+            throw conflict("订单记录已经删除或状态已发生变化。");
+        }
+    }
+
+    @Override
+    @Transactional
     public Map<String, Object> confirmMockPayment(String paymentNo) {
         if (!"MOCK".equals(paymentGateway.provider())) {
             throw badRequest("当前环境不是沙箱支付。");
