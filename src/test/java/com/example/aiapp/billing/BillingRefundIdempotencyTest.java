@@ -2,6 +2,7 @@ package com.example.aiapp.billing;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.aiapp.mapper.RefundOrderMapper;
+import com.example.aiapp.billing.payment.PaymentGatewayRegistry;
 import com.example.aiapp.service.BillingRefundService;
 import com.example.aiapp.service.impl.BillingRefundServiceImpl;
 import org.junit.jupiter.api.Test;
@@ -31,7 +32,7 @@ class BillingRefundIdempotencyTest {
                 refundOrderMapper,
                 new ObjectMapper(),
                 mock(BillingProperties.class),
-                mock(com.example.aiapp.billing.payment.PaymentGateway.class),
+                mock(PaymentGatewayRegistry.class),
                 mock(BillingMetrics.class)
         );
 

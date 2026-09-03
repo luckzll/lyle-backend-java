@@ -60,8 +60,11 @@ public class BillingController {
     }
 
     @PostMapping("/orders/{orderNo}/checkout")
-    Map<String, Object> checkout(@PathVariable String orderNo) {
-        return billingService.checkout(CurrentUserUtils.currentUserId(), orderNo);
+    Map<String, Object> checkout(
+            @PathVariable String orderNo,
+            @RequestParam(required = false) String provider
+    ) {
+        return billingService.checkout(CurrentUserUtils.currentUserId(), orderNo, provider);
     }
 
     @GetMapping("/orders/{orderNo}/status")

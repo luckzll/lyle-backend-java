@@ -92,8 +92,8 @@ public class BillingService {
     }
 
     @Transactional
-    public Map<String, Object> checkout(long userId, String orderNo) {
-        return paymentService.checkout(userId, orderNo);
+    public Map<String, Object> checkout(long userId, String orderNo, String provider) {
+        return paymentService.checkout(userId, orderNo, provider);
     }
 
     @Transactional

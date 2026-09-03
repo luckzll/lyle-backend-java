@@ -3,6 +3,7 @@ package com.example.aiapp.service.impl;
 import com.example.aiapp.billing.BillingMetrics;
 import com.example.aiapp.billing.BillingProperties;
 import com.example.aiapp.billing.BillingRequests;
+import com.example.aiapp.billing.payment.PaymentGatewayRegistry;
 import com.example.aiapp.mapper.PaymentReconciliationItemMapper;
 import com.example.aiapp.service.BillingReconciliationService;
 import org.springframework.http.HttpStatus;
@@ -28,15 +29,18 @@ public class BillingReconciliationServiceImpl implements BillingReconciliationSe
 
     private final PaymentReconciliationItemMapper reconciliationItemMapper;
     private final BillingProperties properties;
+    private final PaymentGatewayRegistry paymentGatewayRegistry;
     private final BillingMetrics metrics;
 
     public BillingReconciliationServiceImpl(
             PaymentReconciliationItemMapper reconciliationItemMapper,
             BillingProperties properties,
+            PaymentGatewayRegistry paymentGatewayRegistry,
             BillingMetrics metrics
     ) {
         this.reconciliationItemMapper = reconciliationItemMapper;
         this.properties = properties;
+        this.paymentGatewayRegistry = paymentGatewayRegistry;
         this.metrics = metrics;
     }
 
@@ -53,7 +57,9 @@ public class BillingReconciliationServiceImpl implements BillingReconciliationSe
     @Transactional
     public Map<String, Object> reconcile(BillingRequests.Reconcile request) {
         require(properties.reconciliationEnabled());
-        String provider = normalize(properties.paymentProvider());
+        String provider = StringUtils.hasText(request.provider())
+                ? paymentGatewayRegistry.requireEnabled(request.provider()).provider()
+                : singleReconciliationProvider();
         Map<String, BillingRequests.ChannelTransaction> channel = new LinkedHashMap<>();
         for (BillingRequests.ChannelTransaction transaction : request.transactions()) {
             channel.put(safe(transaction.paymentNo(), 64), transaction);
@@ -172,6 +178,14 @@ public class BillingReconciliationServiceImpl implements BillingReconciliationSe
     private static long number(Object value) {
         if (value == null) return 0;
         return value instanceof Number number ? number.longValue() : Long.parseLong(String.valueOf(value));
+    }
+
+    private String singleReconciliationProvider() {
+        List<String> providers = paymentGatewayRegistry.enabledProviders();
+        if (providers.size() != 1) {
+            throw badRequest("启用多个支付渠道时，对账请求必须指定 provider。");
+        }
+        return providers.get(0);
     }
 
     private static String normalize(String value) {

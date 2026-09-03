@@ -15,7 +15,7 @@ public interface BillingPaymentService {
 
     Map<String, Object> refreshOrderStatus(long userId, String orderNo);
 
-    Map<String, Object> checkout(long userId, String orderNo);
+    Map<String, Object> checkout(long userId, String orderNo, String provider);
 
     Map<String, Object> closeOrder(long userId, String orderNo);
 

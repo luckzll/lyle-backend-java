@@ -21,7 +21,6 @@ import com.wechat.pay.java.service.refund.model.AmountReq;
 import com.wechat.pay.java.service.refund.model.CreateRequest;
 import com.wechat.pay.java.service.refund.model.QueryByOutRefundNoRequest;
 import com.wechat.pay.java.service.refund.model.Refund;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -34,7 +33,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.HexFormat;
 
 @Component
-@ConditionalOnProperty(prefix = "app.billing", name = "payment-provider", havingValue = "WECHAT_PAY")
 public class WechatPayPaymentGateway implements PaymentGateway {
 
     private static final DateTimeFormatter RFC_3339 = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
