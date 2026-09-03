@@ -29,6 +29,9 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
 
@@ -38,6 +41,7 @@ public class AlipayPaymentGateway implements PaymentGateway {
 
     private static final DateTimeFormatter ALIPAY_TIME =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final ZoneId ALIPAY_ZONE = ZoneId.of("Asia/Shanghai");
     private static final String CHARSET = "UTF-8";
     private final AlipayProperties properties;
 
@@ -72,7 +76,7 @@ public class AlipayPaymentGateway implements PaymentGateway {
             model.setTotalAmount(amount(command.amountMinor()));
             model.setSubject(subject(command.description()));
             model.setProductCode("FAST_INSTANT_TRADE_PAY");
-            model.setTimeExpire(command.expiresAt().format(ALIPAY_TIME));
+            model.setTimeExpire(formatAlipayTime(command.expiresAt()));
             request.setBizModel(model);
 
             AlipayTradePagePayResponse response = client().pageExecute(request, "POST");
@@ -89,6 +93,12 @@ public class AlipayPaymentGateway implements PaymentGateway {
         } catch (AlipayApiException exception) {
             throw unavailable();
         }
+    }
+
+    static String formatAlipayTime(LocalDateTime utcTime) {
+        return utcTime.atOffset(ZoneOffset.UTC)
+                .atZoneSameInstant(ALIPAY_ZONE)
+                .format(ALIPAY_TIME);
     }
 
     @Override
