@@ -11,6 +11,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 智能体操作补偿执行接口。
+ */
 @RestController
 @RequestMapping("/agent-actions")
 public class CompensationController {

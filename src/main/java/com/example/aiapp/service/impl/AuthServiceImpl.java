@@ -21,6 +21,9 @@ import static org.springframework.http.HttpStatus.CONFLICT;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 
+/**
+ * 用户身份认证服务实现。
+ */
 @Service
 public class AuthServiceImpl implements AuthService {
 

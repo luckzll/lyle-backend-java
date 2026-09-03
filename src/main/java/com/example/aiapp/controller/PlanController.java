@@ -12,6 +12,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 用户计划接口。
+ */
 @RestController
 @RequestMapping("/agent/plans")
 public class PlanController {

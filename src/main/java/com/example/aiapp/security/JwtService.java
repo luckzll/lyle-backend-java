@@ -16,6 +16,9 @@ import java.util.Date;
 import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * JWT 签发与校验服务。
+ */
 @Component
 public class JwtService {
 

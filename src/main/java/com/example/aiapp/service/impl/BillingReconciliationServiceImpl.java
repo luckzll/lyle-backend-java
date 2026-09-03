@@ -3,9 +3,9 @@ package com.example.aiapp.service.impl;
 import com.example.aiapp.billing.BillingMetrics;
 import com.example.aiapp.billing.BillingProperties;
 import com.example.aiapp.billing.BillingRequests;
+import com.example.aiapp.mapper.PaymentReconciliationItemMapper;
 import com.example.aiapp.service.BillingReconciliationService;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -20,19 +20,22 @@ import java.util.Map;
 
 import static com.example.aiapp.billing.support.BillingIdentifiers.nextId;
 
+/**
+ * 支付对账服务实现。
+ */
 @Service
 public class BillingReconciliationServiceImpl implements BillingReconciliationService {
 
-    private final JdbcTemplate jdbcTemplate;
+    private final PaymentReconciliationItemMapper reconciliationItemMapper;
     private final BillingProperties properties;
     private final BillingMetrics metrics;
 
     public BillingReconciliationServiceImpl(
-            JdbcTemplate jdbcTemplate,
+            PaymentReconciliationItemMapper reconciliationItemMapper,
             BillingProperties properties,
             BillingMetrics metrics
     ) {
-        this.jdbcTemplate = jdbcTemplate;
+        this.reconciliationItemMapper = reconciliationItemMapper;
         this.properties = properties;
         this.metrics = metrics;
     }
@@ -43,18 +46,7 @@ public class BillingReconciliationServiceImpl implements BillingReconciliationSe
         require(properties.reconciliationEnabled());
         String normalizedStatus = normalizeNullable(status);
         int boundedLimit = Math.max(1, Math.min(limit, 200));
-        String sql = """
-                SELECT *
-                FROM payment_reconciliation_item
-                WHERE 1 = 1
-                """ + (normalizedStatus == null ? "" : " AND process_status = ?") + """
-                ORDER BY reconciliation_date DESC, created_at DESC
-                LIMIT ?
-                """;
-        Object[] arguments = normalizedStatus == null
-                ? new Object[]{boundedLimit}
-                : new Object[]{normalizedStatus, boundedLimit};
-        return jdbcTemplate.queryForList(sql, arguments);
+        return reconciliationItemMapper.selectRecent(normalizedStatus, boundedLimit);
     }
 
     @Override
@@ -68,12 +60,7 @@ public class BillingReconciliationServiceImpl implements BillingReconciliationSe
         }
         LocalDateTime start = request.date().atStartOfDay();
         LocalDateTime end = request.date().plusDays(1).atStartOfDay();
-        List<Map<String, Object>> internal = jdbcTemplate.queryForList(
-                """
-                SELECT payment_no, provider_transaction_id, amount_minor, status
-                FROM payment_attempt
-                WHERE provider = ? AND created_at >= ? AND created_at < ?
-                """,
+        List<Map<String, Object>> internal = reconciliationItemMapper.selectPaymentsForReconciliation(
                 provider,
                 start,
                 end
@@ -140,26 +127,17 @@ public class BillingReconciliationServiceImpl implements BillingReconciliationSe
             long operatorUserId,
             BillingRequests.ResolveReconciliation request
     ) {
-        int updated = jdbcTemplate.update(
-                """
-                UPDATE payment_reconciliation_item
-                SET process_status = 'RESOLVED', assignee_user_id = ?, note = ?,
-                    resolved_at = ?, updated_at = ?
-                WHERE id = ?
-                """,
+        LocalDateTime resolvedAt = LocalDateTime.now();
+        int updated = reconciliationItemMapper.resolveItem(
+                id,
                 operatorUserId,
                 safe(request.note(), 512),
-                LocalDateTime.now(),
-                LocalDateTime.now(),
-                id
+                resolvedAt
         );
         if (updated == 0) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
-        return jdbcTemplate.queryForMap(
-                "SELECT * FROM payment_reconciliation_item WHERE id = ?",
-                id
-        );
+        return reconciliationItemMapper.selectMapById(id);
     }
 
     private void upsertReconciliation(
@@ -174,21 +152,7 @@ public class BillingReconciliationServiceImpl implements BillingReconciliationSe
             String difference
     ) {
         LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-                """
-                INSERT INTO payment_reconciliation_item (
-                    id, reconciliation_date, provider, payment_no, provider_transaction_id,
-                    internal_amount_minor, provider_amount_minor, internal_status,
-                    provider_status, difference_type, process_status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                    internal_amount_minor = VALUES(internal_amount_minor),
-                    provider_amount_minor = VALUES(provider_amount_minor),
-                    internal_status = VALUES(internal_status),
-                    provider_status = VALUES(provider_status),
-                    process_status = VALUES(process_status),
-                    updated_at = VALUES(updated_at)
-                """,
+        reconciliationItemMapper.upsertItem(
                 nextId(),
                 date,
                 provider,

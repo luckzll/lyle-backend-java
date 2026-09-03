@@ -15,6 +15,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 
+/**
+ * 通用文件对象存储服务。
+ */
 @Component
 public class FileStorageService {
 

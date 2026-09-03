@@ -17,6 +17,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
+/**
+ * 用户知识库接口。
+ */
 @RestController
 @RequestMapping("/knowledge-bases")
 public class KnowledgeBaseController {

@@ -18,6 +18,9 @@ import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * 登录会话与刷新令牌生命周期服务。
+ */
 @Service
 public class AuthSessionService {
 

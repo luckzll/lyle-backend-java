@@ -13,6 +13,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 用户目标接口。
+ */
 @RestController
 @RequestMapping("/goals")
 public class GoalController {

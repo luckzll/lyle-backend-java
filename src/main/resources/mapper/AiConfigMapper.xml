@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.AiConfigMapper">
+
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.AiConfigEntity">
+        <id column="config_key" property="configKey"/>
+        <result column="config_value" property="configValue"/>
+        <result column="description" property="description"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        config_key, config_value, description, updated_at
+    </sql>
+
+    <select id="selectAllOrderByConfigKey" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM ai_config
+        ORDER BY config_key ASC
+    </select>
+
+</mapper>

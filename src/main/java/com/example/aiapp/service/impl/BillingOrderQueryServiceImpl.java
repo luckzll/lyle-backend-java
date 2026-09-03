@@ -20,6 +20,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+/**
+ * 计费订单查询服务实现。
+ */
 @Service
 public class BillingOrderQueryServiceImpl implements BillingOrderQueryService {
 

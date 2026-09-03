@@ -1,6 +1,6 @@
 package com.example.aiapp.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.aiapp.domain.dto.CreateKnowledgeBaseDTO;
 import com.example.aiapp.domain.entity.KnowledgeBaseEntity;
@@ -18,6 +18,9 @@ import java.util.List;
 
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
+/**
+ * 用户知识库服务实现。
+ */
 @Service
 public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
 
@@ -56,12 +59,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
 
     @Override
     public PageVO<KnowledgeBaseVO> page(Long userId, long page, long size) {
-        Page<KnowledgeBaseEntity> result = knowledgeBaseMapper.selectPage(
-                Page.of(page, size),
-                new LambdaQueryWrapper<KnowledgeBaseEntity>()
-                        .eq(KnowledgeBaseEntity::getUserId, userId)
-                        .orderByDesc(KnowledgeBaseEntity::getCreatedAt)
-        );
+        IPage<KnowledgeBaseEntity> result = knowledgeBaseMapper.selectPageByUserId(Page.of(page, size), userId);
         return new PageVO<>(
                 result.getRecords().stream().map(this::toVO).toList(),
                 result.getTotal(),

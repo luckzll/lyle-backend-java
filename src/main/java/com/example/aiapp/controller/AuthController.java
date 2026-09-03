@@ -30,6 +30,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
 
+/**
+ * 用户身份认证接口。
+ */
 @RestController
 @RequestMapping("/auth")
 public class AuthController {

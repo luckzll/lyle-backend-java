@@ -18,6 +18,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 智能体任务创建、规划、执行与状态管理接口。
+ */
 @RestController
 @RequestMapping("/agent-tasks")
 public class AgentTaskController {

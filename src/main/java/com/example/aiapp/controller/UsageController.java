@@ -21,6 +21,9 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 用量与计费查询接口。
+ */
 @RestController
 public class UsageController {
 

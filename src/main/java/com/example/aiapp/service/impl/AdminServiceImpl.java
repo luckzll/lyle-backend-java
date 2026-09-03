@@ -1,14 +1,10 @@
 package com.example.aiapp.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.aiapp.domain.dto.AiConfigUpdateDTO;
 import com.example.aiapp.domain.entity.AiConfigEntity;
 import com.example.aiapp.domain.entity.AuditLogEntity;
-import com.example.aiapp.domain.entity.ConversationEntity;
-import com.example.aiapp.domain.entity.KnowledgeBaseEntity;
-import com.example.aiapp.domain.entity.KnowledgeFileEntity;
-import com.example.aiapp.domain.entity.UserEntity;
 import com.example.aiapp.domain.vo.AiConfigItemVO;
 import com.example.aiapp.domain.vo.AdminOverviewVO;
 import com.example.aiapp.domain.vo.AuditLogVO;
@@ -30,6 +26,9 @@ import java.util.Map;
 
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
+/**
+ * 管理后台业务服务实现。
+ */
 @Service
 public class AdminServiceImpl implements AdminService {
 
@@ -62,20 +61,17 @@ public class AdminServiceImpl implements AdminService {
     @Override
     public AdminOverviewVO overview() {
         return new AdminOverviewVO(
-                userMapper.selectCount(new LambdaQueryWrapper<UserEntity>()),
-                conversationMapper.selectCount(new LambdaQueryWrapper<ConversationEntity>()),
-                knowledgeBaseMapper.selectCount(new LambdaQueryWrapper<KnowledgeBaseEntity>()),
-                knowledgeFileMapper.selectCount(new LambdaQueryWrapper<KnowledgeFileEntity>()),
-                auditLogMapper.selectCount(new LambdaQueryWrapper<AuditLogEntity>())
+                userMapper.selectCount(null),
+                conversationMapper.selectCount(null),
+                knowledgeBaseMapper.selectCount(null),
+                knowledgeFileMapper.selectCount(null),
+                auditLogMapper.selectCount(null)
         );
     }
 
     @Override
     public PageVO<AuditLogVO> auditLogs(long page, long size) {
-        Page<AuditLogEntity> result = auditLogMapper.selectPage(
-                Page.of(page, size),
-                new LambdaQueryWrapper<AuditLogEntity>().orderByDesc(AuditLogEntity::getCreatedAt)
-        );
+        IPage<AuditLogEntity> result = auditLogMapper.selectPageOrderByCreatedAtDesc(Page.of(page, size));
         return new PageVO<>(
                 result.getRecords().stream().map(this::toVO).toList(),
                 result.getTotal(),
@@ -86,9 +82,7 @@ public class AdminServiceImpl implements AdminService {
 
     @Override
     public List<AiConfigItemVO> aiConfigs() {
-        return aiConfigMapper.selectList(
-                new LambdaQueryWrapper<AiConfigEntity>().orderByAsc(AiConfigEntity::getConfigKey)
-        ).stream().map(this::toVO).toList();
+        return aiConfigMapper.selectAllOrderByConfigKey().stream().map(this::toVO).toList();
     }
 
     @Override

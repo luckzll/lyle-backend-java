@@ -4,6 +4,9 @@ import com.example.aiapp.domain.dto.AuthRequestDTO;
 import com.example.aiapp.domain.dto.ChangePasswordRequestDTO;
 import com.example.aiapp.domain.vo.AuthResponseVO;
 
+/**
+ * 用户身份认证服务。
+ */
 public interface AuthService {
 
     AuthenticatedSession register(AuthRequestDTO request, String userAgent, String remoteAddress);

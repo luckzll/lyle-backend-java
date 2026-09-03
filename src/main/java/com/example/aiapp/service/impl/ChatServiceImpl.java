@@ -41,6 +41,9 @@ import java.util.regex.Pattern;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
+/**
+ * AI 对话编排服务实现。
+ */
 @Service
 public class ChatServiceImpl implements ChatService {
 

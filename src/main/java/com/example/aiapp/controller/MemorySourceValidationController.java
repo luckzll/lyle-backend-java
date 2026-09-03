@@ -14,6 +14,9 @@ import java.security.MessageDigest;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 记忆来源校验接口。
+ */
 @RestController
 public class MemorySourceValidationController {
 

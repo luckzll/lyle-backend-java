@@ -27,6 +27,9 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
+/**
+ * AI 用量记录、统计与配额控制服务。
+ */
 @Service
 public class UsageService {
 

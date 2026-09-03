@@ -19,6 +19,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
+/**
+ * 用户会话管理接口。
+ */
 @RestController
 @RequestMapping("/conversations")
 public class ConversationController {

@@ -14,6 +14,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 智能工作台接口。
+ */
 @RestController
 @RequestMapping("/workbench")
 public class WorkbenchController {

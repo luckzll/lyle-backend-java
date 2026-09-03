@@ -11,6 +11,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 提示词管理接口。
+ */
 @RestController
 @RequestMapping("/prompts")
 public class PromptController {

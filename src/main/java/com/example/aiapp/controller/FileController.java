@@ -16,6 +16,9 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
+/**
+ * 知识库文件接口。
+ */
 @RestController
 @RequestMapping("/knowledge-bases/{knowledgeBaseId}/files")
 public class FileController {

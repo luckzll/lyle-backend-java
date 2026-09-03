@@ -26,6 +26,9 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * AI 对话接口。
+ */
 @RestController
 @RequestMapping
 public class ChatController {

@@ -10,6 +10,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 智能简报接口。
+ */
 @RestController
 @RequestMapping("/briefings")
 public class BriefingController {

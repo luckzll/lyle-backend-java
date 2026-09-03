@@ -21,6 +21,9 @@ import org.springframework.web.multipart.MultipartFile;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
+/**
+ * 对话附件接口。
+ */
 @RestController
 @RequestMapping("/chat/attachments")
 public class ChatAttachmentController {

@@ -44,6 +44,9 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
+/**
+ * 智能体使命编排与执行应用服务。
+ */
 @Service
 public class MissionService {
 

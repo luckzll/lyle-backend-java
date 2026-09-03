@@ -1,0 +1,324 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.BillingOrderMapper">
+
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.BillingOrderEntity">
+        <id column="id" property="id"/>
+        <result column="order_no" property="orderNo"/>
+        <result column="user_id" property="userId"/>
+        <result column="account_id" property="accountId"/>
+        <result column="order_type" property="orderType"/>
+        <result column="status" property="status"/>
+        <result column="product_code" property="productCode"/>
+        <result column="price_version_code" property="priceVersionCode"/>
+        <result column="product_snapshot" property="productSnapshot"/>
+        <result column="currency" property="currency"/>
+        <result column="original_amount_minor" property="originalAmountMinor"/>
+        <result column="discount_amount_minor" property="discountAmountMinor"/>
+        <result column="payable_amount_minor" property="payableAmountMinor"/>
+        <result column="paid_amount_minor" property="paidAmountMinor"/>
+        <result column="client_request_id" property="clientRequestId"/>
+        <result column="expires_at" property="expiresAt"/>
+        <result column="paid_at" property="paidAt"/>
+        <result column="fulfilled_at" property="fulfilledAt"/>
+        <result column="closed_at" property="closedAt"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, order_no, user_id, account_id, order_type, status, product_code, price_version_code, product_snapshot, currency, original_amount_minor, discount_amount_minor, payable_amount_minor, paid_amount_minor, client_request_id, expires_at, paid_at, fulfilled_at, closed_at, created_at, updated_at
+    </sql>
+
+    <!-- 显式维护数据库字段与订单读取对象的映射，避免依赖隐式驼峰转换。 -->
+    <resultMap id="BillingOrderReadMap" type="com.example.aiapp.domain.vo.BillingOrderReadVO">
+        <result column="order_no" property="orderNo"/>
+        <result column="status" property="status"/>
+        <result column="order_type" property="orderType"/>
+        <result column="product_code" property="productCode"/>
+        <result column="price_version_code" property="priceVersionCode"/>
+        <result column="product_snapshot" property="productSnapshot"/>
+        <result column="currency" property="currency"/>
+        <result column="payable_amount_minor" property="payableAmountMinor"/>
+        <result column="paid_amount_minor" property="paidAmountMinor"/>
+        <result column="payment_no" property="paymentNo"/>
+        <result column="payment_status" property="paymentStatus"/>
+        <result column="payment_provider" property="paymentProvider"/>
+        <result column="refund_status" property="refundStatus"/>
+        <result column="refund_succeeded_at" property="refundSucceededAt"/>
+        <result column="expires_at" property="expiresAt"/>
+        <result column="paid_at" property="paidAt"/>
+        <result column="fulfilled_at" property="fulfilledAt"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <!-- 订单详情与最近一次支付、退款状态共用字段 -->
+    <sql id="billingOrderReadColumns">
+        o.order_no,
+        o.status,
+        o.order_type,
+        o.product_code,
+        o.price_version_code,
+        o.product_snapshot,
+        o.currency,
+        o.payable_amount_minor,
+        o.paid_amount_minor,
+        o.expires_at,
+        o.paid_at,
+        o.fulfilled_at,
+        o.created_at,
+        p.payment_no,
+        p.status AS payment_status,
+        p.provider AS payment_provider,
+        r.status AS refund_status,
+        r.succeeded_at AS refund_succeeded_at
+    </sql>
+
+    <!-- 每个订单仅关联最近一次支付尝试和最近一次退款，避免一对多 JOIN 产生重复订单。 -->
+    <sql id="billingOrderLatestRelations">
+        LEFT JOIN payment_attempt p ON p.id = (
+            SELECT latest_payment.id
+            FROM payment_attempt latest_payment
+            WHERE latest_payment.order_id = o.id
+            ORDER BY latest_payment.created_at DESC, latest_payment.id DESC
+            LIMIT 1
+        )
+        LEFT JOIN refund_order r ON r.id = (
+            SELECT latest_refund.id
+            FROM refund_order latest_refund
+            WHERE latest_refund.order_id = o.id
+            ORDER BY latest_refund.created_at DESC, latest_refund.id DESC
+            LIMIT 1
+        )
+    </sql>
+
+    <!-- 查询用户最近订单 -->
+    <select id="selectUserOrders"
+            resultMap="BillingOrderReadMap">
+        SELECT
+            <include refid="billingOrderReadColumns"/>
+        FROM billing_order o
+        <include refid="billingOrderLatestRelations"/>
+        WHERE o.user_id = #{userId}
+        ORDER BY o.created_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 按订单号查询当前用户订单 -->
+    <select id="selectUserOrder"
+            resultMap="BillingOrderReadMap">
+        SELECT
+            <include refid="billingOrderReadColumns"/>
+        FROM billing_order o
+        <include refid="billingOrderLatestRelations"/>
+        WHERE o.order_no = #{orderNo}
+          AND o.user_id = #{userId}
+    </select>
+
+    <select id="selectOrderNoByClientRequest" resultType="java.lang.String">
+        SELECT order_no
+        FROM billing_order
+        WHERE user_id = #{userId}
+          AND client_request_id = #{clientRequestId}
+        LIMIT 1
+        <if test="forUpdate">
+            FOR UPDATE
+        </if>
+    </select>
+
+    <insert id="insertPaymentAttempt">
+        INSERT INTO payment_attempt (
+            id, payment_no, order_id, provider, status, currency, amount_minor,
+            expires_at, created_at, updated_at
+        ) VALUES (
+            #{id}, #{paymentNo}, #{orderId}, #{provider}, 'PENDING', #{currency}, #{amountMinor},
+            #{expiresAt}, #{createdAt}, #{createdAt}
+        )
+    </insert>
+
+    <update id="markOrderPendingPayment">
+        UPDATE billing_order
+        SET status = 'PENDING_PAYMENT', updated_at = #{updatedAt}
+        WHERE id = #{orderId}
+    </update>
+
+    <update id="markPaymentSucceeded">
+        UPDATE payment_attempt
+        SET status = 'SUCCEEDED',
+            provider_transaction_id = #{providerTransactionId},
+            succeeded_at = #{succeededAt},
+            updated_at = #{succeededAt}
+        WHERE id = #{paymentId}
+    </update>
+
+    <update id="markOrderPaid">
+        UPDATE billing_order
+        SET status = 'PAID',
+            paid_amount_minor = payable_amount_minor,
+            paid_at = COALESCE(paid_at, #{paidAt}),
+            updated_at = #{paidAt}
+        WHERE id = #{orderId}
+          AND status IN ('CREATED', 'PENDING_PAYMENT', 'CLOSED', 'PAID')
+    </update>
+
+    <update id="updateWebhookProcessed">
+        UPDATE payment_webhook_event
+        SET process_status = 'PROCESSED', processed_at = #{processedAt}
+        WHERE provider = #{provider}
+          AND provider_event_id = #{eventId}
+    </update>
+
+    <update id="updateWebhookFailed">
+        UPDATE payment_webhook_event
+        SET process_status = 'FAILED',
+            processed_at = #{processedAt},
+            error_code = #{errorCode}
+        WHERE provider = #{provider}
+          AND provider_event_id = #{eventId}
+    </update>
+
+    <select id="selectExpiredPendingOrderNumbers" resultType="java.lang.String">
+        SELECT order_no
+        FROM billing_order
+        WHERE status IN ('CREATED', 'PENDING_PAYMENT')
+          AND expires_at &lt;= CURRENT_TIMESTAMP(6)
+        ORDER BY expires_at
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectAccountByUserId" resultType="java.util.LinkedHashMap">
+        SELECT *
+        FROM commercial_account
+        WHERE user_id = #{userId}
+        LIMIT 1
+        <if test="forUpdate">
+            FOR UPDATE
+        </if>
+    </select>
+
+    <insert id="insertAccountIgnore">
+        INSERT IGNORE INTO commercial_account (
+            id, user_id, status, version, created_at, updated_at
+        ) VALUES (
+            #{id}, #{userId}, 'ACTIVE', 0, #{createdAt}, #{createdAt}
+        )
+    </insert>
+
+    <select id="selectCurrentPlan" resultType="java.util.LinkedHashMap">
+        SELECT o.order_no,
+               o.product_snapshot,
+               o.fulfilled_at,
+               MAX(g.valid_from) AS valid_from,
+               MAX(g.expires_at) AS expires_at
+        FROM billing_order o
+        JOIN entitlement_grant g
+          ON g.source_type = 'ORDER'
+         AND g.source_id = o.order_no
+        WHERE o.user_id = #{userId}
+          AND o.status IN ('FULFILLED', 'REFUNDING')
+          AND g.status = 'ACTIVE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(o.product_snapshot, '$.productType')) = 'PLAN'
+          AND (g.expires_at IS NULL OR g.expires_at &gt; CURRENT_TIMESTAMP(6))
+        GROUP BY o.id, o.order_no, o.product_snapshot, o.fulfilled_at
+        ORDER BY expires_at DESC, o.fulfilled_at DESC
+        LIMIT 1
+    </select>
+
+    <select id="selectSellablePrice" resultType="java.util.LinkedHashMap">
+        SELECT v.*, p.product_code, p.product_type, p.display_name, p.description
+        FROM billing_price_version v
+        JOIN billing_product p ON p.id = v.product_id
+        WHERE v.version_code = #{versionCode}
+          AND v.status = 'PUBLISHED'
+          AND p.status = 'ACTIVE'
+          AND (v.sell_from IS NULL OR v.sell_from &lt;= CURRENT_TIMESTAMP(6))
+          AND (v.sell_until IS NULL OR v.sell_until &gt; CURRENT_TIMESTAMP(6))
+        LIMIT 1
+    </select>
+
+    <select id="selectOrderForUser" resultType="java.util.LinkedHashMap">
+        SELECT o.*,
+               p.payment_no,
+               p.status AS payment_status,
+               p.provider AS payment_provider,
+               r.status AS refund_status,
+               r.succeeded_at AS refund_succeeded_at
+        FROM billing_order o
+        <include refid="billingOrderLatestRelations"/>
+        WHERE o.order_no = #{orderNo}
+          AND o.user_id = #{userId}
+        <if test="forUpdate">
+            FOR UPDATE
+        </if>
+    </select>
+
+    <select id="selectOrderMapByOrderNo" resultType="java.util.LinkedHashMap">
+        SELECT *
+        FROM billing_order
+        WHERE order_no = #{orderNo}
+        <if test="forUpdate">
+            FOR UPDATE
+        </if>
+    </select>
+
+    <select id="selectPaymentByPaymentNo" resultType="java.util.LinkedHashMap">
+        SELECT p.*, o.order_no, o.status AS order_status, o.user_id, o.account_id
+        FROM payment_attempt p
+        JOIN billing_order o ON o.id = p.order_id
+        WHERE p.payment_no = #{paymentNo}
+        <if test="forUpdate">
+            FOR UPDATE
+        </if>
+    </select>
+
+    <select id="selectLatestPaymentByOrderId" resultType="java.util.LinkedHashMap">
+        SELECT *
+        FROM payment_attempt
+        WHERE order_id = #{orderId}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    </select>
+
+    <update id="markPaymentClosed">
+        UPDATE payment_attempt
+        SET status = 'CLOSED', closed_at = #{closedAt}, updated_at = #{closedAt}
+        WHERE id = #{paymentId}
+          AND status IN ('INITIATED', 'PENDING')
+    </update>
+
+    <update id="markOrderClosed">
+        UPDATE billing_order
+        SET status = 'CLOSED', closed_at = #{closedAt}, updated_at = #{closedAt}
+        WHERE id = #{orderId}
+          AND status IN ('CREATED', 'PENDING_PAYMENT')
+    </update>
+
+    <insert id="insertOutbox">
+        INSERT IGNORE INTO billing_outbox (
+            id, aggregate_type, aggregate_id, event_type, event_version,
+            payload_json, status, retry_count, next_attempt_at, created_at
+        ) VALUES (
+            #{id}, #{aggregateType}, #{aggregateId}, #{eventType}, #{eventVersion},
+            #{payloadJson}, 'PENDING', 0, #{createdAt}, #{createdAt}
+        )
+    </insert>
+
+    <insert id="insertWebhook">
+        INSERT IGNORE INTO payment_webhook_event (
+            id, provider, provider_event_id, payload_hash, signature_valid,
+            process_status, payment_no, received_at, error_code
+        ) VALUES (
+            #{id}, #{provider}, #{providerEventId}, #{payloadHash}, #{signatureValid},
+            #{processStatus}, #{paymentNo}, #{receivedAt}, #{errorCode}
+        )
+    </insert>
+
+    <update id="closePaymentsByOrder">
+        UPDATE payment_attempt
+        SET status = 'CLOSED', closed_at = #{closedAt}, updated_at = #{closedAt}
+        WHERE order_id = #{orderId}
+          AND status IN ('INITIATED', 'PENDING')
+    </update>
+
+</mapper>

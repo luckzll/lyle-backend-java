@@ -20,6 +20,9 @@ import java.util.UUID;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR;
 
+/**
+ * 图片对象存储与访问地址生成服务。
+ */
 @Component
 public class TosImageStorageService {
 

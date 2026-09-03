@@ -9,6 +9,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 智能体操作补偿记录查询接口。
+ */
 @RestController
 @RequestMapping("/compensations")
 public class CompensationLookupController {

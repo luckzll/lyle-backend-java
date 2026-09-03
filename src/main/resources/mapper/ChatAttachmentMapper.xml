@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aiapp.mapper.ChatAttachmentMapper">
+
+    <resultMap id="BaseResultMap" type="com.example.aiapp.domain.entity.ChatAttachmentEntity">
+        <id column="id" property="id"/>
+        <result column="user_id" property="userId"/>
+        <result column="conversation_id" property="conversationId"/>
+        <result column="message_id" property="messageId"/>
+        <result column="kind" property="kind"/>
+        <result column="status" property="status"/>
+        <result column="original_name" property="originalName"/>
+        <result column="content_type" property="contentType"/>
+        <result column="file_size" property="fileSize"/>
+        <result column="storage_provider" property="storageProvider"/>
+        <result column="storage_path" property="storagePath"/>
+        <result column="bucket" property="bucket"/>
+        <result column="object_key" property="objectKey"/>
+        <result column="width" property="width"/>
+        <result column="height" property="height"/>
+        <result column="position" property="position"/>
+        <result column="source_type" property="sourceType"/>
+        <result column="folder_group_id" property="folderGroupId"/>
+        <result column="folder_root" property="folderRoot"/>
+        <result column="relative_path" property="relativePath"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="attached_at" property="attachedAt"/>
+        <result column="expires_at" property="expiresAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, user_id, conversation_id, message_id, kind, status, original_name,
+        content_type, file_size, storage_provider, storage_path, bucket, object_key,
+        width, height, position, source_type, folder_group_id, folder_root,
+        relative_path, created_at, attached_at, expires_at
+    </sql>
+
+    <select id="selectAttachedByMessageId" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM chat_attachment
+        WHERE message_id = #{messageId}
+          AND status = 'ATTACHED'
+        ORDER BY position ASC
+    </select>
+
+    <select id="selectAttachedForRetry" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM chat_attachment
+        WHERE user_id = #{userId}
+          AND conversation_id = #{conversationId}
+          AND message_id = #{messageId}
+          AND status = 'ATTACHED'
+        ORDER BY position ASC
+    </select>
+
+    <select id="selectExpiredReady" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM chat_attachment
+        WHERE status = 'READY'
+          AND expires_at IS NOT NULL
+          AND expires_at &lt; #{expiredBefore}
+        ORDER BY expires_at ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectByUserIdAndIds" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM chat_attachment
+        WHERE user_id = #{userId}
+          AND id IN
+          <foreach collection="ids" item="id" open="(" separator="," close=")">
+              #{id}
+          </foreach>
+    </select>
+
+    <select id="selectByIdAndUserId" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM chat_attachment
+        WHERE id = #{id}
+          AND user_id = #{userId}
+        LIMIT 1
+    </select>
+
+</mapper>

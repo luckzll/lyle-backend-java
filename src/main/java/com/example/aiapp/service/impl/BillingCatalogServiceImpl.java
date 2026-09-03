@@ -1,7 +1,5 @@
 package com.example.aiapp.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.aiapp.billing.BillingRequests;
 import com.example.aiapp.domain.dto.BillingCatalogItemDTO;
 import com.example.aiapp.domain.entity.BillingPriceVersionEntity;
@@ -26,6 +24,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+/**
+ * 计费商品与价格目录服务实现。
+ */
 @Service
 public class BillingCatalogServiceImpl implements BillingCatalogService {
 
@@ -137,14 +138,7 @@ public class BillingCatalogServiceImpl implements BillingCatalogService {
         }
 
         LocalDateTime publishedAt = LocalDateTime.now();
-        int updated = priceVersionMapper.update(
-                null,
-                new LambdaUpdateWrapper<BillingPriceVersionEntity>()
-                        .eq(BillingPriceVersionEntity::getId, price.getId())
-                        .eq(BillingPriceVersionEntity::getStatus, "DRAFT")
-                        .set(BillingPriceVersionEntity::getStatus, "PUBLISHED")
-                        .set(BillingPriceVersionEntity::getPublishedAt, publishedAt)
-        );
+        int updated = priceVersionMapper.publishDraft(price.getId(), publishedAt);
         if (updated == 0) {
             BillingPriceVersionEntity concurrent = findPrice(code);
             if (concurrent != null && "PUBLISHED".equals(normalize(concurrent.getStatus()))) {
@@ -158,20 +152,11 @@ public class BillingCatalogServiceImpl implements BillingCatalogService {
     }
 
     private BillingProductEntity findProduct(String productCode, boolean activeOnly) {
-        LambdaQueryWrapper<BillingProductEntity> query =
-                new LambdaQueryWrapper<BillingProductEntity>()
-                        .eq(BillingProductEntity::getProductCode, productCode);
-        if (activeOnly) {
-            query.eq(BillingProductEntity::getStatus, "ACTIVE");
-        }
-        return productMapper.selectOne(query);
+        return productMapper.selectByProductCode(productCode, activeOnly);
     }
 
     private BillingPriceVersionEntity findPrice(String versionCode) {
-        return priceVersionMapper.selectOne(
-                new LambdaQueryWrapper<BillingPriceVersionEntity>()
-                        .eq(BillingPriceVersionEntity::getVersionCode, versionCode)
-        );
+        return priceVersionMapper.selectByVersionCode(versionCode);
     }
 
     private BillingCatalogItemDTO catalogItem(BillingCatalogRowVO row) {
