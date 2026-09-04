@@ -9,6 +9,7 @@ import com.example.aiapp.domain.entity.ChatMessageEntity;
 import com.example.aiapp.domain.entity.ConversationEntity;
 import com.example.aiapp.domain.vo.ChatMessageVO;
 import com.example.aiapp.domain.vo.ChatResponseVO;
+import com.example.aiapp.domain.vo.SourceVO;
 import com.example.aiapp.infrastructure.client.AiServiceClient;
 import com.example.aiapp.mapper.ChatMessageMapper;
 import com.example.aiapp.mapper.ConversationMapper;
@@ -61,6 +62,7 @@ public class ChatServiceImpl implements ChatService {
     private final ChatMessageMapper chatMessageMapper;
     private final ConversationMapper conversationMapper;
     private final ObjectMapper objectMapper;
+    private final ChatDebugMetadataSanitizer chatDebugMetadataSanitizer;
     private ChatAttachmentService chatAttachmentService;
     private KnowledgeBaseMapper knowledgeBaseMapper;
     private UsageService usageService;
@@ -79,6 +81,7 @@ public class ChatServiceImpl implements ChatService {
         this.chatMessageMapper = chatMessageMapper;
         this.conversationMapper = conversationMapper;
         this.objectMapper = objectMapper;
+        this.chatDebugMetadataSanitizer = new ChatDebugMetadataSanitizer(objectMapper);
     }
 
     @Autowired
@@ -172,22 +175,17 @@ public class ChatServiceImpl implements ChatService {
         assistantMetadata.put("turnId", turnId);
         assistantMetadata.put("phase", "COMPLETED");
         assistantMetadata.put("statusText", "回复完成");
-        assistantMetadata.put("usedMemories", aiResponse.usedMemories() == null ? List.of() : aiResponse.usedMemories());
-        assistantMetadata.put("memoryExclusions", aiResponse.memoryExclusions() == null ? Map.of() : aiResponse.memoryExclusions());
-        assistantMetadata.put(
-                "memoryExplanationVersion",
-                StringUtils.isBlank(aiResponse.memoryExplanationVersion()) ? "v1" : aiResponse.memoryExplanationVersion()
+        Map<String, Object> safeDebug = chatDebugMetadataSanitizer.sanitize(
+                debugPayload(aiResponse, request.knowledgeBaseIds())
         );
-        if (aiResponse.usage() != null) {
-            assistantMetadata.put("usage", aiResponse.usage());
-        }
+        assistantMetadata.putAll(safeDebug);
         saveMessage(conversationId, turnId, "assistant", aiResponse.answer(), assistantMetadata);
         return new ChatResponseVO(
                 conversationId,
                 aiResponse.answer(),
-                aiResponse.sources() == null ? List.of() : aiResponse.sources(),
-                aiResponse.agentTrace() == null ? List.of() : aiResponse.agentTrace(),
-                aiResponse.toolResults() == null ? List.of() : aiResponse.toolResults(),
+                sourceList(safeDebug.get("sources")),
+                mapList(safeDebug.get("agentTrace")),
+                mapList(safeDebug.get("toolResults")),
                 aiResponse.candidateMemories() == null ? List.of() : aiResponse.candidateMemories(),
                 aiResponse.candidateTasks() == null ? List.of() : aiResponse.candidateTasks(),
                 aiResponse.candidateGoals() == null ? List.of() : aiResponse.candidateGoals(),
@@ -196,11 +194,15 @@ public class ChatServiceImpl implements ChatService {
                 aiResponse.candidatePlans() == null ? List.of() : aiResponse.candidatePlans(),
                 aiResponse.executionSuggestions() == null ? List.of() : aiResponse.executionSuggestions(),
                 aiResponse.projectContext() == null ? java.util.Map.of() : aiResponse.projectContext(),
-                aiResponse.review() == null ? java.util.Map.of() : aiResponse.review(),
-                aiResponse.usage() == null ? new com.example.aiapp.domain.dto.UsageDTO(0, 0) : aiResponse.usage(),
-                aiResponse.usedMemories() == null ? List.of() : aiResponse.usedMemories(),
-                aiResponse.memoryExclusions() == null ? Map.of() : aiResponse.memoryExclusions(),
-                StringUtils.isBlank(aiResponse.memoryExplanationVersion()) ? "v1" : aiResponse.memoryExplanationVersion()
+                mapValue(safeDebug.get("review")),
+                usageFromMetadata(safeDebug),
+                mapList(safeDebug.get("usedMemories")),
+                mapValue(safeDebug.get("memoryExclusions")),
+                stringValue(safeDebug.getOrDefault("memoryExplanationVersion", "v1")),
+                stringValue(safeDebug.get("debugVersion")),
+                stringList(safeDebug.get("knowledgeBaseIds")),
+                mapValue(safeDebug.get("retrievalScope")),
+                Boolean.TRUE.equals(safeDebug.get("debugTruncated"))
         );
     }
 
@@ -227,7 +229,7 @@ public class ChatServiceImpl implements ChatService {
             if (!StringUtils.isBlank(existing.getContent())) {
                 chunkConsumer.accept(sse("delta", Map.of("text", existing.getContent())));
             }
-            chunkConsumer.accept(sse("meta", memoryReplayMetadata(metadata)));
+            chunkConsumer.accept(sse("meta", replayMetadata(metadata)));
             chunkConsumer.accept(sse("turn.status", Map.of(
                     "turnId", turnId,
                     "phase", stringValue(metadata.getOrDefault("phase", "COMPLETED")),
@@ -303,6 +305,9 @@ public class ChatServiceImpl implements ChatService {
         initialMetadata.put("turnId", turnId);
         initialMetadata.put("phase", "THINKING");
         initialMetadata.put("statusText", "正在理解你的需求…");
+        initialMetadata.putAll(chatDebugMetadataSanitizer.sanitize(Map.of(
+                "knowledgeBaseIds", request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds()
+        )));
         ChatMessageEntity assistantMessage;
         if (retrying) {
             assistantMessage = existing;
@@ -527,22 +532,17 @@ public class ChatServiceImpl implements ChatService {
                     changed = true;
                 }
                 case "meta" -> {
-                    if (data.get("usage") instanceof Map<?, ?> usage) {
-                        metadata.put("usage", new LinkedHashMap<>(usage));
-                        changed = true;
-                    }
-                    if (data.get("usedMemories") instanceof List<?> usedMemories) {
-                        metadata.put("usedMemories", new ArrayList<>(usedMemories));
-                        changed = true;
-                    }
-                    if (data.get("memoryExclusions") instanceof Map<?, ?> exclusions) {
-                        metadata.put("memoryExclusions", new LinkedHashMap<>(exclusions));
-                        changed = true;
-                    }
-                    if (data.get("memoryExplanationVersion") != null) {
-                        metadata.put("memoryExplanationVersion", String.valueOf(data.get("memoryExplanationVersion")));
-                        changed = true;
-                    }
+                    Map<String, Object> rawDebug = new LinkedHashMap<>(metadata);
+                    rawDebug.putAll(data);
+                    // Only ids already validated against the current user may reach durable metadata.
+                    rawDebug.put("knowledgeBaseIds", metadata.getOrDefault("knowledgeBaseIds", List.of()));
+                    rawDebug.put(
+                            "debugTruncated",
+                            Boolean.TRUE.equals(metadata.get("debugTruncated"))
+                                    || Boolean.TRUE.equals(data.get("debugTruncated"))
+                    );
+                    metadata.putAll(chatDebugMetadataSanitizer.sanitize(rawDebug));
+                    changed = true;
                 }
                 case "error" -> {
                     metadata.put("phase", "FAILED");
@@ -848,25 +848,50 @@ public class ChatServiceImpl implements ChatService {
 
     private ChatResponseVO existingResponse(String conversationId, ChatMessageEntity existing) {
         Map<String, Object> metadata = readMetadata(existing.getMetadataJson());
+        Map<String, Object> safeDebug = chatDebugMetadataSanitizer.sanitize(metadata);
         return new ChatResponseVO(
-                conversationId, existing.getContent(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                List.of(), List.of(), List.of(), List.of(), List.of(), Map.of(), Map.of(),
-                usageFromMetadata(metadata),
-                mapList(metadata.get("usedMemories")),
-                mapValue(metadata.get("memoryExclusions")),
-                stringValue(metadata.getOrDefault("memoryExplanationVersion", "v1"))
+                conversationId,
+                existing.getContent(),
+                sourceList(safeDebug.get("sources")),
+                mapList(safeDebug.get("agentTrace")),
+                mapList(safeDebug.get("toolResults")),
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), Map.of(),
+                mapValue(safeDebug.get("review")),
+                usageFromMetadata(safeDebug),
+                mapList(safeDebug.get("usedMemories")),
+                mapValue(safeDebug.get("memoryExclusions")),
+                stringValue(safeDebug.getOrDefault("memoryExplanationVersion", "v1")),
+                stringValue(safeDebug.get("debugVersion")),
+                stringList(safeDebug.get("knowledgeBaseIds")),
+                mapValue(safeDebug.get("retrievalScope")),
+                Boolean.TRUE.equals(safeDebug.get("debugTruncated"))
         );
     }
 
-    private Map<String, Object> memoryReplayMetadata(Map<String, Object> metadata) {
-        Map<String, Object> replay = new LinkedHashMap<>();
-        replay.put("usedMemories", mapList(metadata.get("usedMemories")));
-        replay.put("memoryExclusions", mapValue(metadata.get("memoryExclusions")));
-        replay.put("memoryExplanationVersion", stringValue(metadata.getOrDefault("memoryExplanationVersion", "v1")));
-        if (metadata.get("usage") instanceof Map<?, ?> usage) {
-            replay.put("usage", new LinkedHashMap<>(usage));
+    private Map<String, Object> replayMetadata(Map<String, Object> metadata) {
+        return chatDebugMetadataSanitizer.sanitize(metadata);
+    }
+
+    private Map<String, Object> debugPayload(AiChatResponseDTO response, List<String> knowledgeBaseIds) {
+        Map<String, Object> raw = new LinkedHashMap<>();
+        if (ChatDebugMetadataSanitizer.DEBUG_VERSION.equals(response.debugVersion())) {
+            raw.put("debugVersion", ChatDebugMetadataSanitizer.DEBUG_VERSION);
         }
-        return replay;
+        raw.put("knowledgeBaseIds", knowledgeBaseIds == null ? List.of() : knowledgeBaseIds);
+        raw.put("retrievalScope", response.retrievalScope() == null ? Map.of() : response.retrievalScope());
+        raw.put("sources", response.sources() == null ? List.of() : response.sources());
+        raw.put("agentTrace", response.agentTrace() == null ? List.of() : response.agentTrace());
+        raw.put("toolResults", response.toolResults() == null ? List.of() : response.toolResults());
+        raw.put("review", response.review() == null ? Map.of() : response.review());
+        raw.put("usage", response.usage());
+        raw.put("usedMemories", response.usedMemories() == null ? List.of() : response.usedMemories());
+        raw.put("memoryExclusions", response.memoryExclusions() == null ? Map.of() : response.memoryExclusions());
+        raw.put(
+                "memoryExplanationVersion",
+                StringUtils.isBlank(response.memoryExplanationVersion()) ? "v1" : response.memoryExplanationVersion()
+        );
+        raw.put("debugTruncated", Boolean.TRUE.equals(response.debugTruncated()));
+        return raw;
     }
 
     @SuppressWarnings("unchecked")
@@ -877,6 +902,39 @@ public class ChatServiceImpl implements ChatService {
         return list.stream()
                 .filter(Map.class::isInstance)
                 .map(item -> (Map<String, Object>) new LinkedHashMap<>((Map<String, Object>) item))
+                .toList();
+    }
+
+    private List<SourceVO> sourceList(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<SourceVO> sources = new ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> source)) continue;
+            sources.add(new SourceVO(
+                    stringValue(source.get("docId")),
+                    stringValue(source.get("title")),
+                    stringValue(source.get("chunk")),
+                    stringValue(source.get("score")),
+                    stringValue(source.get("backend")),
+                    stringValue(source.get("hitModes")),
+                    stringValue(source.get("chunkIndex")),
+                    stringValue(source.get("parentTitle")),
+                    stringValue(source.get("startChar")),
+                    stringValue(source.get("endChar"))
+            ));
+        }
+        return List.copyOf(sources);
+    }
+
+    private List<String> stringList(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        return list.stream()
+                .filter(item -> item != null)
+                .map(String::valueOf)
                 .toList();
     }
 
@@ -1087,16 +1145,36 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private ChatMessageVO toVO(ChatMessageEntity entity) {
+        Map<String, Object> metadata = readMetadata(entity.getMetadataJson());
+        if ("assistant".equals(entity.getRole())) {
+            Map<String, Object> safeMetadata = new LinkedHashMap<>();
+            copyHistoryMetadata(metadata, safeMetadata, "turnId");
+            copyHistoryMetadata(metadata, safeMetadata, "phase");
+            copyHistoryMetadata(metadata, safeMetadata, "statusText");
+            if (metadata.get("imageBatch") instanceof Map<?, ?> imageBatch) {
+                // Image batch metadata is produced and bounded by this service,
+                // and remains outside the agent-debug envelope.
+                safeMetadata.put("imageBatch", new LinkedHashMap<>(imageBatch));
+            }
+            safeMetadata.putAll(chatDebugMetadataSanitizer.sanitize(metadata));
+            metadata = safeMetadata;
+        }
         return new ChatMessageVO(
                 entity.getId(),
                 entity.getConversationId(),
                 entity.getTurnId(),
                 entity.getRole(),
                 entity.getContent(),
-                readMetadata(entity.getMetadataJson()),
+                metadata,
                 entity.getCreatedAt(),
                 chatAttachmentService == null ? List.of() : chatAttachmentService.listForMessage(entity.getId())
         );
+    }
+
+    private void copyHistoryMetadata(Map<String, Object> source, Map<String, Object> target, String key) {
+        if (source.get(key) != null) {
+            target.put(key, source.get(key));
+        }
     }
 
     private record StreamEvent(String name, Map<String, Object> data) {

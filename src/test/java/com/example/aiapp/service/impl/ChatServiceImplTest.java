@@ -4,8 +4,11 @@ import com.example.aiapp.domain.dto.AiChatRequestDTO;
 import com.example.aiapp.domain.dto.AiChatResponseDTO;
 import com.example.aiapp.domain.dto.AiChatAttachmentDTO;
 import com.example.aiapp.domain.dto.ChatRequestDTO;
+import com.example.aiapp.domain.dto.UsageDTO;
 import com.example.aiapp.domain.entity.ChatMessageEntity;
 import com.example.aiapp.domain.entity.ConversationEntity;
+import com.example.aiapp.domain.entity.KnowledgeBaseEntity;
+import com.example.aiapp.domain.vo.SourceVO;
 import com.example.aiapp.infrastructure.client.AiServiceClient;
 import com.example.aiapp.mapper.ChatMessageMapper;
 import com.example.aiapp.mapper.ConversationMapper;
@@ -20,6 +23,7 @@ import reactor.core.publisher.Flux;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -421,7 +425,9 @@ class ChatServiceImplTest {
         ChatMessageEntity assistant = message("assistant", "回复失败，请稍后重试。");
         assistant.setId(99L);
         assistant.setTurnId("turn-retry");
-        assistant.setMetadataJson("{\"turnId\":\"turn-retry\",\"phase\":\"FAILED\",\"statusText\":\"回复失败\"}");
+        assistant.setMetadataJson("{\"turnId\":\"turn-retry\",\"phase\":\"FAILED\",\"statusText\":\"回复失败\","
+                + "\"debugVersion\":\"chat-debug-v1\",\"sources\":[{\"chunk\":\"旧检索快照\"}],"
+                + "\"agentTrace\":[{\"agent\":\"old_agent\"}],\"toolResults\":[{\"tool\":\"old_tool\"}]}");
         when(chatMessageMapper.selectByConversationIdAndTurnId("100", "turn-retry")).thenReturn(assistant);
         when(chatMessageMapper.selectUserByConversationIdAndTurnId("100", "turn-retry")).thenReturn(user);
 
@@ -479,7 +485,12 @@ class ChatServiceImplTest {
         assertThat(request.getValue().message()).isEqualTo("请分析原附件");
         assertThat(request.getValue().attachments()).containsExactly(attachment);
         assertThat(assistant.getContent()).isEqualTo("重试成功");
-        assertThat(assistant.getMetadataJson()).contains("\"phase\":\"COMPLETED\"");
+        assertThat(assistant.getMetadataJson())
+                .contains("\"phase\":\"COMPLETED\"")
+                .doesNotContain("\"debugVersion\"")
+                .doesNotContain("旧检索快照")
+                .doesNotContain("old_agent")
+                .doesNotContain("old_tool");
         verify(chatMessageMapper, never()).insert(any(ChatMessageEntity.class));
         verify(chatAttachmentService).requireAttachedForRetry(
                 42L,
@@ -520,6 +531,11 @@ class ChatServiceImplTest {
         String stream = String.join("", chunks);
         assertThat(stream).contains("\"phase\":\"FAILED\"");
         assertThat(stream).doesNotContain("\"phase\":\"COMPLETED\"");
+        ArgumentCaptor<ChatMessageEntity> saved = ArgumentCaptor.forClass(ChatMessageEntity.class);
+        verify(chatMessageMapper, org.mockito.Mockito.times(2)).insert(saved.capture());
+        assertThat(saved.getAllValues().get(1).getMetadataJson())
+                .contains("\"phase\":\"FAILED\"")
+                .doesNotContain("\"debugVersion\"");
     }
 
     @Test
@@ -701,6 +717,313 @@ class ChatServiceImplTest {
         assertThat(worker.isAlive()).isFalse();
         assertThat(result.content()).isEqualTo("已停止生成。");
         assertThat(result.metadata().toString()).contains("status=CANCELLED");
+    }
+
+    @Test
+    void sendPersistsAndReturnsSanitizedDebugMetadata() throws Exception {
+        AiServiceClient aiServiceClient = mock(AiServiceClient.class);
+        AiConfigService aiConfigService = mock(AiConfigService.class);
+        ChatMessageMapper chatMessageMapper = mock(ChatMessageMapper.class);
+        KnowledgeBaseMapper knowledgeBaseMapper = mock(KnowledgeBaseMapper.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        ChatServiceImpl service = new ChatServiceImpl(
+                aiServiceClient,
+                aiConfigService,
+                chatMessageMapper,
+                mock(ConversationMapper.class),
+                objectMapper
+        );
+        service.setKnowledgeBaseMapper(knowledgeBaseMapper);
+        KnowledgeBaseEntity knowledgeBase = new KnowledgeBaseEntity();
+        knowledgeBase.setId(200L);
+        knowledgeBase.setUserId(42L);
+        when(knowledgeBaseMapper.selectByIdAndUserId(200L, 42L)).thenReturn(knowledgeBase);
+        when(aiConfigService.currentConfigMap()).thenReturn(Map.of());
+
+        Map<String, Object> writerInput = new LinkedHashMap<>();
+        writerInput.put("memoryContextChars", 120);
+        writerInput.put("toolContextChars", 20);
+        writerInput.put("ragContextCount", 1);
+        writerInput.put("combinedContextChars", 140);
+        writerInput.put("memoryContext", "token=LEAKME1234567890");
+        Map<String, Object> trace = new LinkedHashMap<>();
+        trace.put("agent", "writer_agent");
+        trace.put("answerChars", 8);
+        trace.put("writerInput", writerInput);
+        trace.put("privateReasoning", "must-not-survive");
+        Map<String, Object> tool = new LinkedHashMap<>();
+        tool.put("tool", "memory_stats");
+        tool.put("ok", true);
+        tool.put("content", "记忆统计已读取");
+        tool.put("result", Map.of("password", "LEAKME1234567890"));
+
+        when(aiServiceClient.chat(any())).thenReturn(new AiChatResponseDTO(
+                "这是回答。",
+                List.of(new SourceVO(
+                        "file-1", "大模型知识原理.docx #1", "LoRA 通过低秩矩阵完成微调。",
+                        "0.91", "qdrant", "vector", "1", "LoRA", "0", "24"
+                )),
+                new UsageDTO(100, 20, 3, 2_000L, "PROVIDER_REPORTED"),
+                List.of(trace),
+                List.of(tool),
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                Map.of(),
+                Map.of("approved", true, "reason", "规则通过", "privateReasoning", "must-not-survive"),
+                List.of(Map.of(
+                        "memoryId", "profile:12",
+                        "title", "当前角色",
+                        "valueSummary", "程序员",
+                        "reasonCode", "QUESTION_RELEVANT",
+                        "reliability", "RELIABLE",
+                        "sourceCount", 1
+                )),
+                Map.of("conflicted", 0, "sensitive", 1, "governed", 0),
+                "v1",
+                "chat-debug-v1",
+                List.of("999"),
+                Map.of(
+                        "requested", true,
+                        "executed", true,
+                        "skipped", false,
+                        "knowledgeBaseCount", 1,
+                        "queryCount", 2,
+                        "contextCount", 1,
+                        "reason", "检索完成"
+                ),
+                false
+        ));
+
+        var response = service.send(42L, new ChatRequestDTO(
+                "temporary-conversation", null, null, "LoRA 是什么？", List.of("200")
+        ));
+
+        ArgumentCaptor<ChatMessageEntity> saved = ArgumentCaptor.forClass(ChatMessageEntity.class);
+        verify(chatMessageMapper, org.mockito.Mockito.times(2)).insert(saved.capture());
+        ChatMessageEntity assistant = saved.getAllValues().get(1);
+        Map<String, Object> metadata = objectMapper.readValue(assistant.getMetadataJson(), Map.class);
+        assertThat(metadata.get("debugVersion")).isEqualTo("chat-debug-v1");
+        assertThat(metadata.get("knowledgeBaseIds")).isEqualTo(List.of("200"));
+        assertThat(metadata.get("sources")).asList().hasSize(1);
+        assertThat(metadata.get("agentTrace")).asList().hasSize(1);
+        assertThat(metadata.get("toolResults")).asList().hasSize(1);
+        assertThat(metadata.get("review")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("approved", true);
+        assertThat(assistant.getMetadataJson())
+                .doesNotContain("LEAKME1234567890")
+                .doesNotContain("must-not-survive")
+                .doesNotContain("privateReasoning")
+                .doesNotContain("memoryContext\"")
+                .doesNotContain("\"result\"");
+        assertThat(response.sources()).hasSize(1);
+        assertThat(response.agentTrace()).hasSize(1);
+        assertThat(response.toolResults()).hasSize(1);
+        assertThat(response.debugVersion()).isEqualTo("chat-debug-v1");
+        assertThat(response.knowledgeBaseIds()).containsExactly("200");
+        assertThat(response.retrievalScope()).containsEntry("executed", true);
+    }
+
+    @Test
+    void sendDoesNotPromoteMissingOrUnknownDebugVersionToCompleteSnapshot() throws Exception {
+        AiServiceClient aiServiceClient = mock(AiServiceClient.class);
+        AiConfigService aiConfigService = mock(AiConfigService.class);
+        ChatMessageMapper chatMessageMapper = mock(ChatMessageMapper.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        when(aiConfigService.currentConfigMap()).thenReturn(Map.of());
+        AiChatResponseDTO missingVersion = new AiChatResponseDTO(
+                "旧服务回答",
+                List.of(),
+                new UsageDTO(3, 2),
+                List.of(Map.of("agent", "writer_agent", "answerChars", 5)),
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                Map.of(), Map.of()
+        );
+        AiChatResponseDTO unknownVersion = new AiChatResponseDTO(
+                "未知版本回答",
+                List.of(),
+                new UsageDTO(4, 2),
+                List.of(Map.of("agent", "writer_agent", "answerChars", 6)),
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                Map.of(), Map.of(), List.of(), Map.of(), "v1",
+                "chat-debug-v2", List.of(), Map.of(), false
+        );
+        when(aiServiceClient.chat(any())).thenReturn(missingVersion, unknownVersion);
+        ChatServiceImpl service = new ChatServiceImpl(
+                aiServiceClient,
+                aiConfigService,
+                chatMessageMapper,
+                mock(ConversationMapper.class),
+                objectMapper
+        );
+
+        var missing = service.send(42L, new ChatRequestDTO(
+                "temporary-conversation", "turn-missing-version", null, "旧服务", List.of()
+        ));
+        var unknown = service.send(42L, new ChatRequestDTO(
+                "temporary-conversation", "turn-unknown-version", null, "未知服务", List.of()
+        ));
+
+        ArgumentCaptor<ChatMessageEntity> saved = ArgumentCaptor.forClass(ChatMessageEntity.class);
+        verify(chatMessageMapper, org.mockito.Mockito.times(4)).insert(saved.capture());
+        ChatMessageEntity missingAssistant = saved.getAllValues().get(1);
+        ChatMessageEntity unknownAssistant = saved.getAllValues().get(3);
+        assertThat(missing.debugVersion()).isEmpty();
+        assertThat(unknown.debugVersion()).isEmpty();
+        assertThat(missingAssistant.getMetadataJson()).doesNotContain("debugVersion");
+        assertThat(unknownAssistant.getMetadataJson())
+                .doesNotContain("debugVersion")
+                .doesNotContain("chat-debug-v2");
+    }
+
+    @Test
+    void streamPersistsCompleteSafeMetaEnvelope() throws Exception {
+        AiServiceClient aiServiceClient = mock(AiServiceClient.class);
+        AiConfigService aiConfigService = mock(AiConfigService.class);
+        ChatMessageMapper chatMessageMapper = mock(ChatMessageMapper.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        when(aiConfigService.currentConfigMap()).thenReturn(Map.of());
+        when(aiServiceClient.streamChat(any())).thenReturn(Flux.just(
+                "event: delta\ndata: {\"text\":\"检索结果\"}\n\n",
+                "event: meta\ndata: {\"debugVersion\":\"chat-debug-v1\",\"sources\":[{\"docId\":\"file-1\",\"title\":\"knowledge.docx #1\",\"chunk\":\"检索片段\",\"score\":\"0.9\"}],"
+                        + "\"agentTrace\":[{\"agent\":\"rag_agent\",\"contextCount\":1,\"queryCount\":2,\"decision\":{\"reason\":\"已检索\",\"raw_input\":\"must-not-survive\"}}],"
+                        + "\"toolResults\":[{\"tool\":\"health_check\",\"ok\":true,\"content\":\"服务正常\",\"result\":{\"token\":\"LEAKME1234567890\"}}],"
+                        + "\"review\":{\"approved\":true,\"reason\":\"审核通过\",\"privateReasoning\":\"must-not-survive\"},"
+                        + "\"usage\":{\"promptTokens\":10,\"completionTokens\":5,\"callCount\":2,\"estimatedCostMicros\":3,\"measurementSource\":\"ESTIMATED\"},"
+                        + "\"usedMemories\":[],\"memoryExclusions\":{\"conflicted\":0,\"sensitive\":0,\"governed\":0},"
+                        + "\"retrievalScope\":{\"requested\":true,\"executed\":true,\"skipped\":false,\"knowledgeBaseCount\":0,\"queryCount\":2,\"contextCount\":1,\"reason\":\"检索完成\"}}\n\n",
+                "event: done\ndata: {}\n\n"
+        ));
+        ChatServiceImpl service = new ChatServiceImpl(
+                aiServiceClient,
+                aiConfigService,
+                chatMessageMapper,
+                mock(ConversationMapper.class),
+                objectMapper
+        );
+
+        service.stream(42L, new ChatRequestDTO(
+                "temporary-conversation", "turn-debug-meta", null, "读取知识", List.of()
+        ), ignored -> {
+        });
+
+        ArgumentCaptor<ChatMessageEntity> saved = ArgumentCaptor.forClass(ChatMessageEntity.class);
+        verify(chatMessageMapper, org.mockito.Mockito.times(2)).insert(saved.capture());
+        ChatMessageEntity assistant = saved.getAllValues().get(1);
+        Map<String, Object> metadata = objectMapper.readValue(assistant.getMetadataJson(), Map.class);
+        assertThat(metadata.get("debugVersion")).isEqualTo("chat-debug-v1");
+        assertThat(metadata.get("sources")).asList().hasSize(1);
+        assertThat(metadata.get("agentTrace")).asList().hasSize(1);
+        assertThat(metadata.get("toolResults")).asList().hasSize(1);
+        assertThat(metadata.get("review")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("approved", true);
+        assertThat(metadata.get("retrievalScope")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("contextCount", 1);
+        assertThat(assistant.getMetadataJson())
+                .doesNotContain("LEAKME1234567890")
+                .doesNotContain("must-not-survive")
+                .doesNotContain("privateReasoning")
+                .doesNotContain("raw_input")
+                .doesNotContain("\"result\"");
+    }
+
+    @Test
+    void existingTurnRestoresDebugForSyncAndStreamReplayWithoutCallingAi() throws Exception {
+        AiServiceClient aiServiceClient = mock(AiServiceClient.class);
+        ChatMessageMapper chatMessageMapper = mock(ChatMessageMapper.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        ChatMessageEntity existing = message("assistant", "已保存的回答");
+        existing.setId(99L);
+        existing.setTurnId("turn-replay-debug");
+        existing.setMetadataJson(objectMapper.writeValueAsString(Map.ofEntries(
+                Map.entry("turnId", "turn-replay-debug"),
+                Map.entry("phase", "COMPLETED"),
+                Map.entry("statusText", "回复完成"),
+                Map.entry("debugVersion", "chat-debug-v1"),
+                Map.entry("knowledgeBaseIds", List.of("200")),
+                Map.entry("retrievalScope", Map.of("requested", true, "executed", true, "contextCount", 1)),
+                Map.entry("sources", List.of(Map.of(
+                        "docId", "file-1", "title", "knowledge.docx #1", "chunk", "历史检索片段", "score", "0.9"
+                ))),
+                Map.entry("agentTrace", List.of(Map.of("agent", "rag_agent", "contextCount", 1))),
+                Map.entry("toolResults", List.of(Map.of("tool", "health_check", "ok", true, "content", "已完成"))),
+                Map.entry("review", Map.of("approved", true, "reason", "通过")),
+                Map.entry("usage", Map.of(
+                        "promptTokens", 10, "completionTokens", 4, "callCount", 1,
+                        "estimatedCostMicros", 2, "measurementSource", "ESTIMATED"
+                )),
+                Map.entry("usedMemories", List.of(Map.of(
+                        "memoryId", "profile:1", "title", "当前角色", "valueSummary", "程序员",
+                        "reasonCode", "QUESTION_RELEVANT", "reliability", "RELIABLE", "sourceCount", 1
+                ))),
+                Map.entry("memoryExclusions", Map.of("conflicted", 0, "sensitive", 0, "governed", 0)),
+                Map.entry("memoryExplanationVersion", "v1")
+        )));
+        when(chatMessageMapper.selectByConversationIdAndTurnId(
+                "temporary-conversation", "turn-replay-debug"
+        )).thenReturn(existing);
+        ChatServiceImpl service = new ChatServiceImpl(
+                aiServiceClient,
+                mock(AiConfigService.class),
+                chatMessageMapper,
+                mock(ConversationMapper.class),
+                objectMapper
+        );
+
+        var sync = service.send(42L, new ChatRequestDTO(
+                "temporary-conversation", "turn-replay-debug", null, "不应重复请求", List.of()
+        ));
+        List<String> replay = new ArrayList<>();
+        service.stream(42L, new ChatRequestDTO(
+                "temporary-conversation", "turn-replay-debug", null, "不应重复请求", List.of()
+        ), replay::add);
+
+        assertThat(sync.sources()).hasSize(1);
+        assertThat(sync.agentTrace()).hasSize(1);
+        assertThat(sync.toolResults()).hasSize(1);
+        assertThat(sync.review()).containsEntry("approved", true);
+        assertThat(sync.knowledgeBaseIds()).containsExactly("200");
+        String stream = String.join("", replay);
+        assertThat(stream)
+                .contains("\"debugVersion\":\"chat-debug-v1\"")
+                .contains("\"sources\":[{")
+                .contains("\"agentTrace\":[{")
+                .contains("\"toolResults\":[{")
+                .contains("\"review\":{\"approved\":true");
+        verify(aiServiceClient, never()).chat(any());
+        verify(aiServiceClient, never()).streamChat(any());
+    }
+
+    @Test
+    void legacyHistoryKeepsAvailableMemoryDetailsWithoutClaimingCompleteDebugData() throws Exception {
+        ChatMessageMapper chatMessageMapper = mock(ChatMessageMapper.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        ChatMessageEntity legacy = message("assistant", "旧回答");
+        legacy.setId(101L);
+        legacy.setTurnId("turn-legacy");
+        legacy.setMetadataJson(objectMapper.writeValueAsString(Map.of(
+                "turnId", "turn-legacy",
+                "phase", "COMPLETED",
+                "usedMemories", List.of(Map.of(
+                        "memoryId", "profile:1",
+                        "title", "当前角色",
+                        "valueSummary", "程序员"
+                )),
+                "writerInput", Map.of("combinedContext", "must-not-survive")
+        )));
+        when(chatMessageMapper.selectByConversationId("temporary-conversation")).thenReturn(List.of(legacy));
+        ChatServiceImpl service = new ChatServiceImpl(
+                mock(AiServiceClient.class),
+                mock(AiConfigService.class),
+                chatMessageMapper,
+                mock(ConversationMapper.class),
+                objectMapper
+        );
+
+        var metadata = service.listMessages(42L, "temporary-conversation").get(0).metadata();
+
+        assertThat(metadata).doesNotContainKey("debugVersion");
+        assertThat(metadata).doesNotContainKey("writerInput");
+        assertThat(metadata.get("usedMemories")).asList().hasSize(1);
+        assertThat(metadata).containsEntry("turnId", "turn-legacy").containsEntry("phase", "COMPLETED");
     }
 
     private ChatMessageEntity message(String role, String content) {
