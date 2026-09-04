@@ -8,6 +8,7 @@ import com.example.aiapp.config.V63FeatureProperties;
 import com.example.aiapp.domain.dto.AuthRequestDTO;
 import com.example.aiapp.domain.dto.ChatRequestDTO;
 import com.example.aiapp.domain.dto.UpdateConversationDTO;
+import com.example.aiapp.domain.dto.UpdateKnowledgeBaseDTO;
 import com.example.aiapp.domain.entity.UserEntity;
 import com.example.aiapp.domain.vo.AdminOverviewVO;
 import com.example.aiapp.domain.vo.AuthResponseVO;
@@ -717,6 +718,59 @@ class ControllerIntegrationTest {
                 .andExpect(jsonPath("$[0].name").value("研发资料"));
 
         verify(knowledgeBaseService).list(42L);
+    }
+
+    @Test
+    void knowledgeBaseCreateValidatesBlankAndOverlongNames() throws Exception {
+        mockMvc.perform(post("/knowledge-bases")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"   "}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(post("/knowledge-bases")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("name", "x".repeat(256)))))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void knowledgeBaseNameUpdateIsScopedToCurrentUser() throws Exception {
+        LocalDateTime now = LocalDateTime.parse("2026-06-30T18:00:00");
+        when(knowledgeBaseService.updateName(eq(42L), eq(200L), any(UpdateKnowledgeBaseDTO.class)))
+                .thenReturn(new KnowledgeBaseVO(200L, "Java 开发资料", now));
+
+        mockMvc.perform(patch("/knowledge-bases/200")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"Java 开发资料"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(200))
+                .andExpect(jsonPath("$.name").value("Java 开发资料"));
+
+        verify(knowledgeBaseService).updateName(eq(42L), eq(200L), any(UpdateKnowledgeBaseDTO.class));
+    }
+
+    @Test
+    void knowledgeBaseNameUpdateValidatesBlankAndOverlongNames() throws Exception {
+        mockMvc.perform(patch("/knowledge-bases/200")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"   "}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(patch("/knowledge-bases/200")
+                        .header("Authorization", bearer(42L, "lyle", "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("name", "x".repeat(256)))))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

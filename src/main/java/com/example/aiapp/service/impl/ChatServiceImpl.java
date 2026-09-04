@@ -12,6 +12,7 @@ import com.example.aiapp.domain.vo.ChatResponseVO;
 import com.example.aiapp.infrastructure.client.AiServiceClient;
 import com.example.aiapp.mapper.ChatMessageMapper;
 import com.example.aiapp.mapper.ConversationMapper;
+import com.example.aiapp.mapper.KnowledgeBaseMapper;
 import com.example.aiapp.service.AiConfigService;
 import com.example.aiapp.service.ChatAttachmentService;
 import com.example.aiapp.service.ChatService;
@@ -61,6 +62,7 @@ public class ChatServiceImpl implements ChatService {
     private final ConversationMapper conversationMapper;
     private final ObjectMapper objectMapper;
     private ChatAttachmentService chatAttachmentService;
+    private KnowledgeBaseMapper knowledgeBaseMapper;
     private UsageService usageService;
     private BillingService billingService;
     private final ConcurrentMap<String, ActiveTurn> activeTurns = new ConcurrentHashMap<>();
@@ -85,6 +87,11 @@ public class ChatServiceImpl implements ChatService {
     }
 
     @Autowired
+    void setKnowledgeBaseMapper(KnowledgeBaseMapper knowledgeBaseMapper) {
+        this.knowledgeBaseMapper = knowledgeBaseMapper;
+    }
+
+    @Autowired
     void setUsageService(UsageService usageService) {
         this.usageService = usageService;
     }
@@ -96,6 +103,7 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     public ChatResponseVO send(Long userId, ChatRequestDTO request) {
+        ensureKnowledgeBasesOwnedByUser(userId, request.knowledgeBaseIds());
         String conversationId = StringUtils.isBlank(request.conversationId())
                 ? UUID.randomUUID().toString()
                 : request.conversationId();
@@ -198,6 +206,7 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     public void stream(Long userId, ChatRequestDTO request, Consumer<String> chunkConsumer) {
+        ensureKnowledgeBasesOwnedByUser(userId, request.knowledgeBaseIds());
         String conversationId = StringUtils.isBlank(request.conversationId())
                 ? UUID.randomUUID().toString()
                 : request.conversationId();
@@ -691,6 +700,26 @@ public class ChatServiceImpl implements ChatService {
             }
         } catch (NumberFormatException ignored) {
             // Temporary UUID conversations are owned by the current request flow.
+        }
+    }
+
+    private void ensureKnowledgeBasesOwnedByUser(Long userId, List<String> knowledgeBaseIds) {
+        if (knowledgeBaseIds == null || knowledgeBaseIds.isEmpty()) {
+            return;
+        }
+        if (knowledgeBaseMapper == null) {
+            throw new IllegalStateException("Knowledge base ownership validation is unavailable.");
+        }
+        for (String rawKnowledgeBaseId : knowledgeBaseIds) {
+            Long knowledgeBaseId;
+            try {
+                knowledgeBaseId = Long.valueOf(rawKnowledgeBaseId);
+            } catch (NumberFormatException exception) {
+                throw new ResponseStatusException(NOT_FOUND, "知识库不存在");
+            }
+            if (knowledgeBaseId <= 0 || knowledgeBaseMapper.selectByIdAndUserId(knowledgeBaseId, userId) == null) {
+                throw new ResponseStatusException(NOT_FOUND, "知识库不存在");
+            }
         }
     }
 

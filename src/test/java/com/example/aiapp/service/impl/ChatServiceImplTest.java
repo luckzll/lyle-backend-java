@@ -9,11 +9,13 @@ import com.example.aiapp.domain.entity.ConversationEntity;
 import com.example.aiapp.infrastructure.client.AiServiceClient;
 import com.example.aiapp.mapper.ChatMessageMapper;
 import com.example.aiapp.mapper.ConversationMapper;
+import com.example.aiapp.mapper.KnowledgeBaseMapper;
 import com.example.aiapp.service.AiConfigService;
 import com.example.aiapp.service.ChatAttachmentService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 
 import java.time.LocalDateTime;
@@ -24,6 +26,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.atLeastOnce;
@@ -33,6 +36,94 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ChatServiceImplTest {
+
+    @Test
+    void sendRejectsKnowledgeBaseThatDoesNotBelongToCurrentUser() {
+        AiServiceClient aiServiceClient = mock(AiServiceClient.class);
+        ChatMessageMapper chatMessageMapper = mock(ChatMessageMapper.class);
+        KnowledgeBaseMapper knowledgeBaseMapper = mock(KnowledgeBaseMapper.class);
+        ChatServiceImpl service = new ChatServiceImpl(
+                aiServiceClient,
+                mock(AiConfigService.class),
+                chatMessageMapper,
+                mock(ConversationMapper.class),
+                new ObjectMapper()
+        );
+        service.setKnowledgeBaseMapper(knowledgeBaseMapper);
+        when(knowledgeBaseMapper.selectByIdAndUserId(200L, 42L)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.send(42L, new ChatRequestDTO(
+                null,
+                null,
+                null,
+                "读取资料",
+                List.of("200")
+        )))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("404 NOT_FOUND");
+
+        verify(knowledgeBaseMapper).selectByIdAndUserId(200L, 42L);
+        verify(aiServiceClient, never()).chat(any());
+        verify(chatMessageMapper, never()).insert(any(ChatMessageEntity.class));
+    }
+
+    @Test
+    void streamRejectsKnowledgeBaseThatDoesNotBelongToCurrentUser() {
+        AiServiceClient aiServiceClient = mock(AiServiceClient.class);
+        ChatMessageMapper chatMessageMapper = mock(ChatMessageMapper.class);
+        KnowledgeBaseMapper knowledgeBaseMapper = mock(KnowledgeBaseMapper.class);
+        ChatServiceImpl service = new ChatServiceImpl(
+                aiServiceClient,
+                mock(AiConfigService.class),
+                chatMessageMapper,
+                mock(ConversationMapper.class),
+                new ObjectMapper()
+        );
+        service.setKnowledgeBaseMapper(knowledgeBaseMapper);
+        when(knowledgeBaseMapper.selectByIdAndUserId(200L, 42L)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.stream(42L, new ChatRequestDTO(
+                null,
+                "turn-knowledge-scope",
+                null,
+                "读取资料",
+                List.of("200")
+        ), ignored -> {
+        }))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("404 NOT_FOUND");
+
+        verify(knowledgeBaseMapper).selectByIdAndUserId(200L, 42L);
+        verify(aiServiceClient, never()).streamChat(any());
+        verify(chatMessageMapper, never()).insert(any(ChatMessageEntity.class));
+    }
+
+    @Test
+    void sendRejectsMalformedKnowledgeBaseIdWithoutCallingAiService() {
+        AiServiceClient aiServiceClient = mock(AiServiceClient.class);
+        KnowledgeBaseMapper knowledgeBaseMapper = mock(KnowledgeBaseMapper.class);
+        ChatServiceImpl service = new ChatServiceImpl(
+                aiServiceClient,
+                mock(AiConfigService.class),
+                mock(ChatMessageMapper.class),
+                mock(ConversationMapper.class),
+                new ObjectMapper()
+        );
+        service.setKnowledgeBaseMapper(knowledgeBaseMapper);
+
+        assertThatThrownBy(() -> service.send(42L, new ChatRequestDTO(
+                null,
+                null,
+                null,
+                "读取资料",
+                List.of("not-a-number")
+        )))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("404 NOT_FOUND");
+
+        verify(knowledgeBaseMapper, never()).selectByIdAndUserId(any(), any());
+        verify(aiServiceClient, never()).chat(any());
+    }
 
     @Test
     void imageFollowUpCanSelectPreviousCartoonImageInsteadOfLatestImage() {
