@@ -1,6 +1,7 @@
 package com.example.aiapp.service;
 
 import com.example.aiapp.domain.dto.CreateKnowledgeBaseDTO;
+import com.example.aiapp.domain.dto.UpdateKnowledgeBaseDTO;
 import com.example.aiapp.domain.vo.KnowledgeBaseVO;
 import com.example.aiapp.domain.vo.PageVO;
 
@@ -16,6 +17,8 @@ public interface KnowledgeBaseService {
     List<KnowledgeBaseVO> list(Long userId);
 
     PageVO<KnowledgeBaseVO> page(Long userId, long page, long size);
+
+    KnowledgeBaseVO updateName(Long userId, Long knowledgeBaseId, UpdateKnowledgeBaseDTO request);
 
     void delete(Long userId, Long knowledgeBaseId);
 }

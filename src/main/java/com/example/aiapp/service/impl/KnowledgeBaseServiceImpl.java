@@ -3,6 +3,7 @@ package com.example.aiapp.service.impl;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.aiapp.domain.dto.CreateKnowledgeBaseDTO;
+import com.example.aiapp.domain.dto.UpdateKnowledgeBaseDTO;
 import com.example.aiapp.domain.entity.KnowledgeBaseEntity;
 import com.example.aiapp.domain.vo.KnowledgeBaseVO;
 import com.example.aiapp.domain.vo.PageVO;
@@ -66,6 +67,18 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
                 result.getCurrent(),
                 result.getSize()
         );
+    }
+
+    @Override
+    public KnowledgeBaseVO updateName(Long userId, Long knowledgeBaseId, UpdateKnowledgeBaseDTO request) {
+        KnowledgeBaseEntity entity = knowledgeBaseMapper.selectByIdAndUserId(knowledgeBaseId, userId);
+        if (entity == null) {
+            throw new ResponseStatusException(NOT_FOUND, "知识库不存在");
+        }
+        entity.setName(request.name().trim());
+        knowledgeBaseMapper.updateById(entity);
+        auditLogService.record(userId, "update", "knowledge_base", String.valueOf(knowledgeBaseId));
+        return toVO(entity);
     }
 
     @Override
