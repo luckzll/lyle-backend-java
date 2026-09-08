@@ -302,6 +302,29 @@ public class AiServiceClient {
         return getJson("/ai/memory/{userId}/inbox", userId);
     }
 
+    public Map<String, Object> getMemorySchema(String userId) {
+        return getJson("/ai/memory/{userId}/schema", userId);
+    }
+
+    public Map<String, Object> getMemoryFacts(String userId) {
+        return getJson("/ai/memory/{userId}/facts", userId);
+    }
+
+    public Map<String, Object> reviseMemoryFact(String userId, String factId, Map<String, Object> request) {
+        return aiServiceWebClient.put()
+                .uri("/ai/memory/{userId}/facts/{factId}", userId, factId)
+                .bodyValue(request).retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {}).block();
+    }
+
+    public Map<String, Object> rebuildMemorySchema(String userId) {
+        return postJson("/ai/memory/{userId}/schema/rebuild", Map.of(), userId);
+    }
+
+    public Map<String, Object> recallMemorySchema(String userId, Map<String, Object> request) {
+        return postJson("/ai/memory/{userId}/schema/recall", request, userId);
+    }
+
     public Map<String, Object> resolveMemoryConflict(
             String userId,
             long conflictId,
