@@ -229,6 +229,28 @@ class ChatDebugMetadataSanitizerTest {
     }
 
     @Test
+    void preservesActionConstraintReasonWithoutPersistingRawRecallContext() throws Exception {
+        Map<String, Object> safe = sanitizer.sanitize(Map.of(
+                "usedMemories", List.of(Map.of(
+                        "memoryId", "profile:9",
+                        "title", "互动边界",
+                        "valueSummary", "不要主动追问家庭",
+                        "reasonCode", "ACTION_CONSTRAINT",
+                        "reliability", "RELIABLE",
+                        "sourceCount", 1
+                )),
+                "compiled_context", "RAW_RECALL_BODY_DO_NOT_STORE",
+                "governance", Map.of("blockedTerms", List.of("PRIVATE_DISABLED_MEMORY"))
+        ));
+
+        Map<?, ?> memory = (Map<?, ?>) ((List<?>) safe.get("usedMemories")).get(0);
+        assertThat(memory.get("reasonCode")).isEqualTo("ACTION_CONSTRAINT");
+        assertThat(memory.get("sourceCount")).isEqualTo(1);
+        assertThat(objectMapper.writeValueAsString(safe))
+                .doesNotContain("RAW_RECALL_BODY_DO_NOT_STORE", "PRIVATE_DISABLED_MEMORY");
+    }
+
+    @Test
     void neverTreatsRawToolContentAsSafeDisplaySummary() throws Exception {
         Map<String, Object> safe = sanitizer.sanitize(Map.of(
                 "debugVersion", "chat-debug-v1",

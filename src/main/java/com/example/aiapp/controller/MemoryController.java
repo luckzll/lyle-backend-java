@@ -46,6 +46,35 @@ public class MemoryController {
         return aiServiceClient.getMemory(String.valueOf(CurrentUserUtils.currentUserId()), conversationId);
     }
 
+    @GetMapping("/schema")
+    Map<String, Object> schema() {
+        return aiServiceClient.getMemorySchema(currentUserId());
+    }
+
+    @GetMapping("/facts")
+    Map<String, Object> facts() {
+        return aiServiceClient.getMemoryFacts(currentUserId());
+    }
+
+    @PutMapping("/facts/{factId}")
+    Map<String, Object> reviseFact(@PathVariable String factId, @RequestBody Map<String, Object> request) {
+        Map<String, Object> result = aiServiceClient.reviseMemoryFact(currentUserId(), factId, request);
+        audit("fact_revision", factId);
+        return result;
+    }
+
+    @PostMapping("/schema/rebuild")
+    Map<String, Object> rebuildSchema() {
+        Map<String, Object> result = aiServiceClient.rebuildMemorySchema(currentUserId());
+        audit("schema_rebuild", "schema");
+        return result;
+    }
+
+    @PostMapping("/schema/recall")
+    Map<String, Object> recallSchema(@RequestBody Map<String, Object> request) {
+        return aiServiceClient.recallMemorySchema(currentUserId(), request);
+    }
+
     @GetMapping("/records")
     Map<String, Object> records(
             @RequestParam(required = false) String status,
