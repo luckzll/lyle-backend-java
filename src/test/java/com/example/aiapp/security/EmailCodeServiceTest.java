@@ -43,9 +43,10 @@ class EmailCodeServiceTest {
         verify(values).set(key.capture(), digest.capture(), eq(Duration.ofMinutes(5)));
         var message = ArgumentCaptor.forClass(MimeMessage.class);
         verify(mail).send(message.capture());
-        var matcher = Pattern.compile("[0-9]{6}").matcher(message.getValue().getContent().toString());
+        var matcher = Pattern.compile("[0-9]{6}").matcher(body(message.getValue(), "text/plain"));
         assertThat(matcher.find()).isTrue();
         String code = matcher.group();
+        assertThat(body(message.getValue(), "text/html")).contains(code, "欢迎回来", "5 分钟内有效").doesNotContain("{{", "<script", "<img");
         assertThat(digest.getValue()).hasSize(64).isNotEqualTo(code);
         assertThat(service.verify("USER@example.com", code, "login")).isEqualTo("user@example.com");
         verify(redis).execute(eq(EmailCodeService.VERIFY), eq(List.of(key.getValue(), key.getValue() + ":attempts")), eq(digest.getValue()));
@@ -56,6 +57,24 @@ class EmailCodeServiceTest {
         when(values.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(false);
         assertThatThrownBy(() -> service.send("a@example.com", "login")).isInstanceOf(ResponseStatusException.class);
         verifyNoInteractions(mail);
+    }
+    private static String body(jakarta.mail.Part part, String mime) throws Exception {
+        if (part instanceof MimeMessage message) message.saveChanges();
+        if (part.isMimeType(mime)) return part.getContent().toString();
+        if (part.getContent() instanceof jakarta.mail.Multipart multipart) {
+            for (int i = 0; i < multipart.getCount(); i++) {
+                String result = body(multipart.getBodyPart(i), mime);
+                if (!result.isEmpty()) return result;
+            }
+        }
+        return "";
+    }
+    @Test void bindingEmailHasMatchingHtmlAndPlainText() throws Exception {
+        service.send("a@example.com", "bind:7");
+        var message = ArgumentCaptor.forClass(MimeMessage.class);
+        verify(mail).send(message.capture());
+        assertThat(body(message.getValue(), "text/plain")).contains("绑定邮箱");
+        assertThat(body(message.getValue(), "text/html")).contains("验证你的邮箱", "完成邮箱绑定").doesNotContain("欢迎回来", "{{");
     }
     @Test void failedDeliveryInvalidatesCode() {
         doThrow(new MailSendException("smtp failure")).when(mail).send(any(MimeMessage.class));
