@@ -106,7 +106,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         String ip = digest(clientIpResolver.resolve(request));
         List<LimitKey> keys = new ArrayList<>();
-        if (path.endsWith("/auth/login")) {
+        if (path.contains("/auth/email/")) {
+            keys.add(new LimitKey("auth:email:ip:" + ip, 10));
+        } else if (path.endsWith("/auth/login")) {
             keys.add(new LimitKey("auth:login:ip:" + ip, positive(properties.authPerMinute(), 20)));
             String username = username(request);
             if (!username.isBlank()) {
