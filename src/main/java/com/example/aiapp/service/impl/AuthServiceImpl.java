@@ -29,6 +29,19 @@ public class AuthServiceImpl implements AuthService {
 
     private static final String DEFAULT_ROLE = "USER";
 
+    @Override
+    @Transactional
+    public AuthenticatedSession loginVerifiedUser(Long userId, String userAgent, String remoteAddress) {
+        UserEntity entity = userMapper.selectAccountById(userId);
+        if (entity == null || !"ACTIVE".equalsIgnoreCase(entity.getStatus())) {
+            throw new ResponseStatusException(UNAUTHORIZED, "账号不可用，请联系管理员。");
+        }
+        entity.setLastLoginAt(LocalDateTime.now());
+        entity.setUpdatedAt(LocalDateTime.now());
+        userMapper.updateById(entity);
+        return createSession(entity, userAgent, remoteAddress);
+    }
+
     private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;

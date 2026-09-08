@@ -83,6 +83,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
@@ -100,6 +101,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(controllers = {
         AuthController.class,
+        EmailAuthController.class,
         BriefingController.class,
         ChatController.class,
         ConnectorController.class,
@@ -159,6 +161,12 @@ class ControllerIntegrationTest {
 
     @MockBean
     AuthService authService;
+
+    @MockBean
+    com.example.aiapp.security.EmailCodeService emailCodes;
+
+    @MockBean
+    com.example.aiapp.service.EmailIdentityService emailIdentities;
 
     @MockBean
     AuthSessionService authSessionService;
@@ -1280,6 +1288,49 @@ class ControllerIntegrationTest {
                 .andExpect(jsonPath("$.value").value("true"));
 
         verify(adminService).updateAiConfig(eq(1L), any());
+    }
+
+    @Test
+    void emailLoginReturnsExistingSessionAndHttpOnlyCookie() throws Exception {
+        when(emailCodes.verify("a@example.com", "123456", "login")).thenReturn("a@example.com");
+        when(emailIdentities.login(eq("a@example.com"), any(), any())).thenReturn(
+                new AuthService.AuthenticatedSession(new AuthResponseVO(new UserVO(42L, "zhoulele", "USER"), "access"), "refresh-test"));
+        mockMvc.perform(post("/auth/email/login").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\"a@example.com\",\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user.username").value("zhoulele"))
+                .andExpect(jsonPath("$.accessToken").value("access"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie().httpOnly("lyle_refresh", true))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie().path("lyle_refresh", "/api/auth"));
+    }
+
+    @Test
+    void emailBindingRequiresAuthentication() throws Exception {
+        mockMvc.perform(post("/auth/email/binding/code").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\"a@example.com\"}")).andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/auth/email/binding").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\"a@example.com\",\"code\":\"123456\"}")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/auth/email/binding")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void emailBindingUsesAuthenticatedUserNotBodyUserId() throws Exception {
+        when(emailCodes.verify("a@example.com", "123456", "bind:42")).thenReturn("a@example.com");
+        mockMvc.perform(post("/auth/email/binding").header("Authorization", bearer(42L, "zhoulele", "USER"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\"a@example.com\",\"code\":\"123456\",\"userId\":1}"))
+                .andExpect(status().isOk());
+        verify(emailIdentities).bind(42L, "a@example.com");
+    }
+
+    @Test
+    void invalidEmailCodeDoesNotIssueSession() throws Exception {
+        when(emailCodes.verify(anyString(), anyString(), eq("login"))).thenThrow(
+                new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "验证码无效"));
+        mockMvc.perform(post("/auth/email/login").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\"a@example.com\",\"code\":\"000000\"}"))
+                .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(emailIdentities);
     }
 
     private String bearer(Long userId, String username, String role) {

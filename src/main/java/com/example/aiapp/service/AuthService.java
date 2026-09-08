@@ -8,6 +8,7 @@ import com.example.aiapp.domain.vo.AuthResponseVO;
  * 用户身份认证服务。
  */
 public interface AuthService {
+    AuthenticatedSession loginVerifiedUser(Long userId, String userAgent, String remoteAddress);
 
     AuthenticatedSession register(AuthRequestDTO request, String userAgent, String remoteAddress);
 

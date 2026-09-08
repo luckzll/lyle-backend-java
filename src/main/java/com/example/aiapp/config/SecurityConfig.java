@@ -45,9 +45,12 @@ public class SecurityConfig {
                                 HttpMethod.POST,
                                 "/auth/register",
                                 "/auth/login",
+                                "/auth/email/code",
+                                "/auth/email/login",
                                 "/auth/refresh"
                         ).permitAll()
                         .requestMatchers(HttpMethod.GET, "/billing/catalog").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/auth/email/options").permitAll()
                         .requestMatchers(
                                 "/health",
                                 "/internal/ai-usage/events:batch",
