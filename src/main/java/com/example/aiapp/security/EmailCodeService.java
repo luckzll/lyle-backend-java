@@ -89,12 +89,13 @@ public class EmailCodeService {
             redis.opsForValue().set(key, hash(purpose + ":" + email + ":" + code), Duration.ofMinutes(5));
             try {
                 var message = mail.createMimeMessage();
-                var helper = new MimeMessageHelper(message, "UTF-8");
+                var helper = new MimeMessageHelper(message, true, "UTF-8");
                 helper.setFrom(from, fromName);
                 helper.setTo(email);
                 helper.setSubject("Lyle AI 邮箱验证码");
                 helper.setText("你的" + (purpose.startsWith("bind:") ? "绑定邮箱" : "登录") + "验证码是：" + code
-                        + "\n5分钟内有效，仅可使用一次。请勿向他人提供验证码。如非本人操作，请忽略。", false);
+                        + "\n5分钟内有效，仅可使用一次。请勿向他人提供验证码。如非本人操作，请忽略。",
+                        VerificationEmail.html(code, purpose.startsWith("bind:")));
                 mail.send(message);
             } catch (Exception e) {
                 redis.delete(key);
