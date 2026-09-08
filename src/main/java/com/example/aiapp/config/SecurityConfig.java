@@ -41,10 +41,12 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
+                        .requestMatchers("/auth/login", "/auth/register", "/auth/change-password")
+                            .denyAll()
                         .requestMatchers(
                                 HttpMethod.POST,
-                                "/auth/register",
-                                "/auth/login",
+                                "/auth/captcha/challenge",
+                                "/auth/captcha/verify",
                                 "/auth/email/code",
                                 "/auth/email/login",
                                 "/auth/refresh"

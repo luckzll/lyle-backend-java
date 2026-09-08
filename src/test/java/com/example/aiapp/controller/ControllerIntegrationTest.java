@@ -102,6 +102,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(controllers = {
         AuthController.class,
         EmailAuthController.class,
+        CaptchaController.class,
         BriefingController.class,
         ChatController.class,
         ConnectorController.class,
@@ -149,6 +150,26 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.v63.folder-attachments-enabled=false"
 })
 class ControllerIntegrationTest {
+    @Test
+    void captchaEndpointsArePublicButBindingStillRequiresLogin() throws Exception {
+        var image = new cloud.tianai.captcha.application.vo.ImageCaptchaVO();
+        image.setId("SLIDER_" + "a".repeat(32));
+        when(humanVerification.challenge(any(), any())).thenReturn(image);
+        mockMvc.perform(post("/auth/captcha/challenge").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(image.getId()))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string("Cache-Control", "no-store"));
+        when(humanVerification.solve(any(), any(), any())).thenReturn(Map.of("captchaToken", "a".repeat(43)));
+        mockMvc.perform(post("/auth/captcha/verify").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"id\":\"" + image.getId() + "\",\"track\":{}}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.captchaToken").exists());
+        mockMvc.perform(post("/auth/captcha/verify").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/auth/email/binding/code").contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"user@qq.com\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+    @MockBean
+    com.example.aiapp.security.HumanVerificationService humanVerification;
+
 
     @Autowired
     MockMvc mockMvc;
@@ -267,63 +288,35 @@ class ControllerIntegrationTest {
     }
 
     @Test
-    void authEndpointsArePublic() throws Exception {
-        when(authService.register(any(AuthRequestDTO.class), any(), any())).thenReturn(
-                new AuthService.AuthenticatedSession(
-                        new AuthResponseVO(new UserVO(7L, "new-user", "USER"), "token"),
-                        "refresh-token"
-                )
-        );
-
-        mockMvc.perform(post("/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"username":"new-user","password":"12345678"}
-                                """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.user.id").value(7))
-                .andExpect(jsonPath("$.user.username").value("new-user"))
-                .andExpect(jsonPath("$.accessToken").value("token"));
+    void usernameAuthenticationEndpointsAreRemovedEvenForAuthenticatedUsers() throws Exception {
+        for (String path : java.util.List.of("/auth/login", "/auth/register", "/auth/change-password")) {
+            mockMvc.perform(post(path).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                    .andExpect(status().isUnauthorized());
+            mockMvc.perform(post(path).header("Authorization", bearer(42L, "zhoulele", "USER"))
+                            .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                    .andExpect(status().isForbidden());
+        }
+        org.mockito.Mockito.verifyNoInteractions(authService);
     }
 
     @Test
-    void loginAcceptsLegacySixCharacterPasswordsButRegistrationStillRequiresEight() throws Exception {
-        when(authService.login(any(AuthRequestDTO.class), any(), any())).thenReturn(
-                new AuthService.AuthenticatedSession(
-                        new AuthResponseVO(new UserVO(8L, "legacy-user", "USER"), "legacy-token"),
-                        "legacy-refresh-token"
-                )
-        );
-
-        mockMvc.perform(post("/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"username":"legacy-user","password":"123456"}
-                                """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.accessToken").value("legacy-token"));
-
-        mockMvc.perform(post("/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"username":"new-user","password":"123456"}
-                                """))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("密码需要 8～128 个字符。"));
+    void emailSendRequiresServerVerificationBeforeMail() throws Exception {
+        org.mockito.Mockito.doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "验证失败"))
+                .when(humanVerification).verify(any(), any(), any());
+        mockMvc.perform(post("/auth/email/code").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"user@qq.com\"}"))
+                .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(emailCodes);
     }
 
     @Test
-    void registrationExplainsAnExistingUsername() throws Exception {
-        when(authService.register(any(AuthRequestDTO.class), any(), any()))
-                .thenThrow(new ResponseStatusException(HttpStatus.CONFLICT, "该用户名已被注册，请直接登录。"));
-
-        mockMvc.perform(post("/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"username":"existing-user","password":"12345678"}
-                                """))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.detail").value("该用户名已被注册，请直接登录。"));
+    void verifiedEmailSendWorksForOtherMailboxProviders() throws Exception {
+        mockMvc.perform(post("/auth/email/code").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"user@163.com\",\"captchaToken\":\"proof\"}"))
+                .andExpect(status().isOk());
+        var order = org.mockito.Mockito.inOrder(humanVerification, emailCodes);
+        order.verify(humanVerification).verify(eq("proof"), org.mockito.ArgumentMatchers.isNull(), any());
+        order.verify(emailCodes).send("user@163.com", "login");
     }
 
     @Test

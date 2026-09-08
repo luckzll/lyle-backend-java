@@ -3,6 +3,7 @@ package com.example.aiapp.controller;
 import com.example.aiapp.config.AuthProperties;
 import com.example.aiapp.domain.vo.AuthResponseVO;
 import com.example.aiapp.security.EmailCodeService;
+import com.example.aiapp.security.HumanVerificationService;
 import com.example.aiapp.service.EmailIdentityService;
 import com.example.aiapp.utils.CurrentUserUtils;
 import jakarta.servlet.http.HttpServletRequest;
@@ -24,15 +25,19 @@ public class EmailAuthController {
     private final EmailCodeService codes;
     private final EmailIdentityService identities;
     private final AuthProperties properties;
-    public EmailAuthController(EmailCodeService codes, EmailIdentityService identities, AuthProperties properties) {
+    private final HumanVerificationService verification;
+    public EmailAuthController(EmailCodeService codes, EmailIdentityService identities, AuthProperties properties, HumanVerificationService verification) {
         this.codes = codes; this.identities = identities; this.properties = properties;
+        this.verification = verification;
     }
-    public record EmailRequest(@NotBlank @Size(max=254) String email) {}
+    public record EmailRequest(@NotBlank @Size(max=254) String email, @Size(max=2048) String captchaToken, @Size(max=256) String captchaRandstr) {}
     public record VerifyRequest(@NotBlank @Size(max=254) String email, @NotBlank @Size(min=6,max=6) String code) {}
     @GetMapping("/options")
-    public Map<String, Boolean> options() { return Map.of("enabled", codes.enabled()); }
+    public Map<String, Object> options() { return Map.of("enabled", codes.enabled(), "captcha", verification.options()); }
     @PostMapping("/code")
-    public Map<String, Object> code(@Valid @RequestBody EmailRequest body) {
+    public Map<String, Object> code(@Valid @RequestBody EmailRequest body, HttpServletRequest request) {
+        EmailCodeService.normalize(body.email());
+        verification.verify(body.captchaToken(), body.captchaRandstr(), request);
         codes.send(body.email(), "login");
         return Map.of("message", "验证码已发送，请检查收件箱或垃圾邮件。", "retryAfterSeconds", 60);
     }
@@ -48,7 +53,9 @@ public class EmailAuthController {
     @GetMapping("/binding")
     public Map<String, String> binding() { return Map.of("email", identities.email(CurrentUserUtils.currentUserId())); }
     @PostMapping("/binding/code")
-    public Map<String, Object> bindingCode(@Valid @RequestBody EmailRequest body) {
+    public Map<String, Object> bindingCode(@Valid @RequestBody EmailRequest body, HttpServletRequest request) {
+        EmailCodeService.normalize(body.email());
+        verification.verify(body.captchaToken(), body.captchaRandstr(), request);
         codes.send(body.email(), "bind:" + CurrentUserUtils.currentUserId());
         return Map.of("message", "验证码已发送。", "retryAfterSeconds", 60);
     }

@@ -1,13 +1,11 @@
 # 邮箱验证码登录
 
-保留原用户名/密码登录。邮箱验证码验证成功后，已绑定邮箱进入原 user_id；未绑定邮箱自动创建普通 USER 账号。
+仅保留邮箱验证码登录。用户名注册、密码登录和修改密码接口已禁用。邮箱验证码验证成功后，已绑定邮箱进入原 user_id；未绑定邮箱自动创建普通 USER 账号。
 不根据用户名、SMTP 发信邮箱自动合并用户，不删除测试账号。新邮箱账号使用验证码登录，其随机生成的内部密码不提供给用户。
 
-## zhoulele 绑定步骤
+## 旧账号上线前检查
 
-1. 使用原用户名和密码登录。
-2. 打开设置 → 账号与安全 → 绑定邮箱。
-3. 输入本人邮箱，获取验证码并验证。聊天、知识库和订单继续属于原 user_id。
+部署邮箱唯一入口之前，必须确认 zhoulele 已绑定本人邮箱。尚未绑定的保留账号应在旧版本登录并完成绑定后再切换；不能在禁用用户名入口后依赖密码登录来补绑。有效会话内仍可在设置绑定邮箱。聊天、知识库和订单继续属于原 user_id。
 
 不要先在登录页使用未绑定邮箱登录，否则会创建独立账号。已绑定其他用户的邮箱不可覆盖绑定。
 当前不提供自助更换已绑定邮箱或账户合并。
@@ -29,14 +27,14 @@ MAIL_FROM_NAME=Lyle AI
 ```
 
 使用未分享的应用专用密码。STARTTLS 必须成功，连接/读写有超时。服务器需要可访问 SMTP 服务；本地可访问不代表生产服务器可访问。
-MAIL_ENABLED 默认 false；关闭时前端隐藏入口，发送和校验接口返回 503。
+MAIL_ENABLED 默认 false；关闭时前端显示服务不可用，发送和校验接口返回 503。
 上线需要后端重新构建、前端重新构建及 Flyway V31 迁移，不能只改 .env。
 
 ## 安全行为与接口
 
-- POST /api/auth/email/code：请求 email；成功统一返回发送提示。
+- POST /api/auth/email/code：请求 email、captchaToken（本地天爱验证签发的一次性票据）；成功统一返回发送提示。
 - POST /api/auth/email/login：请求 email、code；成功返回原 AuthResponse 和 HttpOnly Refresh Cookie。
-- GET /api/auth/email/options：是否启用。
+- GET /api/auth/email/options：邮件是否启用及公开人机验证配置（provider=tianai、configured），无需外部平台密钥。部署说明见 CAPTCHA_SETUP.md。
 - GET /api/auth/email/binding：已登录用户的绑定邮箱。
 - POST /api/auth/email/binding/code、POST /api/auth/email/binding：必须携带有效登录凭据，验证码绑定当前 user_id 和用途。
 - 邮箱统一 trim 和小写；暂仅支持 ASCII 邮箱，不做 Gmail 点号/加号别名合并。

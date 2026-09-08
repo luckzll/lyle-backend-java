@@ -106,7 +106,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         String ip = digest(clientIpResolver.resolve(request));
         List<LimitKey> keys = new ArrayList<>();
-        if (path.contains("/auth/email/")) {
+        if (path.contains("/auth/captcha/")) {
+            keys.add(new LimitKey("auth:captcha:ip:" + ip, 20));
+        } else if (path.contains("/auth/email/")) {
             keys.add(new LimitKey("auth:email:ip:" + ip, 10));
         } else if (path.endsWith("/auth/login")) {
             keys.add(new LimitKey("auth:login:ip:" + ip, positive(properties.authPerMinute(), 20)));
@@ -186,7 +188,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static boolean requiresAuthBody(HttpServletRequest request) {
         String path = request.getRequestURI();
         return "POST".equalsIgnoreCase(request.getMethod())
-                && (path.endsWith("/auth/login") || path.endsWith("/auth/register"));
+                && (path.endsWith("/auth/login") || path.endsWith("/auth/register") || path.contains("/auth/captcha/"));
     }
 
     private String refreshCookie(HttpServletRequest request) {
