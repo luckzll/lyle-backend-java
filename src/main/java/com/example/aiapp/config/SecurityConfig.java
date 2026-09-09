@@ -49,10 +49,20 @@ public class SecurityConfig {
                                 "/auth/captcha/verify",
                                 "/auth/email/code",
                                 "/auth/email/login",
+                                "/auth/wechat/start",
+                                "/auth/wechat/cancel",
+                                "/auth/wechat/complete",
+                                "/auth/wechat/email/code",
+                                "/auth/wechat/email/login",
+                                "/auth/migration/start",
+                                "/auth/migration/cancel",
+                                "/auth/migration/email/code",
+                                "/auth/migration/email/login",
                                 "/auth/refresh"
                         ).permitAll()
                         .requestMatchers(HttpMethod.GET, "/billing/catalog").permitAll()
                         .requestMatchers(HttpMethod.GET, "/auth/email/options").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/auth/wechat/options", "/auth/wechat/callback").permitAll()
                         .requestMatchers(
                                 "/health",
                                 "/internal/ai-usage/events:batch",

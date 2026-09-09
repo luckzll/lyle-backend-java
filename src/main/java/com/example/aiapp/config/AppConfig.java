@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @EnableConfigurationProperties({
         AiServiceProperties.class,
         AuthProperties.class,
+        WechatLoginProperties.class,
         RedisProperties.class,
         MinioProperties.class,
         QdrantProperties.class,

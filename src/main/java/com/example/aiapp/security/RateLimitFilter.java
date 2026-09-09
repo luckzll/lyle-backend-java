@@ -108,6 +108,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
         List<LimitKey> keys = new ArrayList<>();
         if (path.contains("/auth/captcha/")) {
             keys.add(new LimitKey("auth:captcha:ip:" + ip, 20));
+        } else if (path.contains("/auth/migration/")) {
+            keys.add(new LimitKey("auth:migration:ip:" + ip, 10));
+            if (path.endsWith("/start")) keys.add(new LimitKey("auth:migration:user:" + digest(username(request).toLowerCase(Locale.ROOT)), 5));
+        } else if (path.contains("/auth/wechat/")) {
+            keys.add(new LimitKey("auth:wechat:ip:" + ip, 20));
         } else if (path.contains("/auth/email/")) {
             keys.add(new LimitKey("auth:email:ip:" + ip, 10));
         } else if (path.endsWith("/auth/login")) {
@@ -188,7 +193,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static boolean requiresAuthBody(HttpServletRequest request) {
         String path = request.getRequestURI();
         return "POST".equalsIgnoreCase(request.getMethod())
-                && (path.endsWith("/auth/login") || path.endsWith("/auth/register") || path.contains("/auth/captcha/"));
+                && (path.endsWith("/auth/login") || path.endsWith("/auth/register") || path.contains("/auth/captcha/") || path.endsWith("/auth/migration/start"));
     }
 
     private String refreshCookie(HttpServletRequest request) {
