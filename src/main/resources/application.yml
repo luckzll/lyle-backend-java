@@ -68,6 +68,11 @@ ai:
     response-timeout-seconds: ${AI_SERVICE_RESPONSE_TIMEOUT_SECONDS:120}
 
 app:
+  wechat-login:
+    enabled: ${WECHAT_LOGIN_ENABLED:false}
+    app-id: ${WECHAT_LOGIN_APP_ID:}
+    app-secret: ${WECHAT_LOGIN_APP_SECRET:}
+    callback-url: ${WECHAT_LOGIN_CALLBACK_URL:https://luckyzll.site/api/auth/wechat/callback}
   scheduling:
     enabled: ${APP_SCHEDULING_ENABLED:true}
   v63:

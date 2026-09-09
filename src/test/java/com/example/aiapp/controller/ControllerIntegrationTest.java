@@ -102,6 +102,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(controllers = {
         AuthController.class,
         EmailAuthController.class,
+        WechatLoginController.class,
+        LegacyMigrationController.class,
         CaptchaController.class,
         BriefingController.class,
         ChatController.class,
@@ -124,6 +126,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Import({SecurityConfig.class, JwtService.class, JwtAuthenticationFilter.class, RateLimitFilter.class})
 @EnableConfigurationProperties({
         AuthProperties.class,
+        com.example.aiapp.config.WechatLoginProperties.class,
         RateLimitProperties.class,
         RedisProperties.class,
         V63FeatureProperties.class
@@ -150,6 +153,22 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.v63.folder-attachments-enabled=false"
 })
 class ControllerIntegrationTest {
+    @MockBean
+    com.example.aiapp.service.LegacyAccountMigration legacyMigration;
+    @MockBean
+    com.example.aiapp.security.WechatLoginFlow wechatFlows;
+    @MockBean
+    com.example.aiapp.service.WechatIdentityService wechatIdentities;
+
+    @Test void wechatPublicEndpointsStillRequireBrowserOrigin() throws Exception {
+        mockMvc.perform(get("/auth/wechat/options")).andExpect(status().isOk());
+        mockMvc.perform(post("/auth/wechat/start")).andExpect(status().isForbidden());
+        when(wechatFlows.start(null)).thenReturn(new com.example.aiapp.security.WechatLoginFlow.Start("b".repeat(43),"https://open.weixin.qq.com/connect/qrconnect",300));
+        mockMvc.perform(post("/auth/wechat/start").header("Origin","http://127.0.0.1:4173").header("Host","127.0.0.1:4173"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.qrUrl").exists());
+        mockMvc.perform(get("/auth/wechat/callback").param("state","state").param("code","code"))
+                .andExpect(status().isFound());
+    }
     @Test
     void captchaEndpointsArePublicButBindingStillRequiresLogin() throws Exception {
         var image = new cloud.tianai.captcha.application.vo.ImageCaptchaVO();
