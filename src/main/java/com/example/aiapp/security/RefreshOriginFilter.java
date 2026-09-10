@@ -27,7 +27,7 @@ public class RefreshOriginFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String requestPath = request.getRequestURI().substring(request.getContextPath().length());
         return !"POST".equalsIgnoreCase(request.getMethod())
-                || !("/auth/refresh".equals(requestPath) || requestPath.startsWith("/auth/wechat/") || requestPath.startsWith("/auth/migration/"));
+                || !"/auth/refresh".equals(requestPath);
     }
 
     @Override
