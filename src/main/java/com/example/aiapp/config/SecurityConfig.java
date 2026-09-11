@@ -49,6 +49,9 @@ public class SecurityConfig {
                                 "/auth/captcha/verify",
                                 "/auth/email/code",
                                 "/auth/email/login",
+                                "/auth/email/password/login",
+                                "/auth/email/password/code",
+                                "/auth/email/password/reset",
                                 "/auth/refresh"
                         ).permitAll()
                         .requestMatchers(HttpMethod.GET, "/billing/catalog").permitAll()

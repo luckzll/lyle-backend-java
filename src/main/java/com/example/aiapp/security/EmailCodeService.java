@@ -105,9 +105,9 @@ public class EmailCodeService {
                 helper.setFrom(from, fromName);
                 helper.setTo(email);
                 helper.setSubject("Lyle AI 邮箱验证码");
-                helper.setText("你的" + (purpose.startsWith("bind:") ? "绑定邮箱" : "登录") + "验证码是：" + code
+                helper.setText("你的" + (purpose.startsWith("bind:") ? "绑定邮箱" : purpose.equals("password") ? "设置登录密码" : "登录") + "验证码是：" + code
                         + "\n5分钟内有效，仅可使用一次。请勿向他人提供验证码。如非本人操作，请忽略。",
-                        VerificationEmail.html(code, purpose.startsWith("bind:")));
+                        VerificationEmail.html(code, purpose));
                 mail.send(message);
             } catch (Exception e) {
                 Throwable cause = e;
