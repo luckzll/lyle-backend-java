@@ -10,6 +10,8 @@ import com.example.aiapp.domain.vo.AuthResponseVO;
 public interface AuthService {
     AuthenticatedSession loginVerifiedUser(Long userId, String userAgent, String remoteAddress);
 
+    AuthenticatedSession resetVerifiedPassword(Long userId, String password, String userAgent, String remoteAddress);
+
     AuthenticatedSession register(AuthRequestDTO request, String userAgent, String remoteAddress);
 
     default AuthResponseVO register(AuthRequestDTO request) {

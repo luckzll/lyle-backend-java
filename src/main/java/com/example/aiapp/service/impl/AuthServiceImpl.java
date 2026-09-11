@@ -47,6 +47,28 @@ public class AuthServiceImpl implements AuthService {
     private final JwtService jwtService;
     private final AuthSessionService authSessionService;
 
+    @Override
+    @Transactional
+    public AuthenticatedSession resetVerifiedPassword(Long userId, String password, String userAgent, String remoteAddress) {
+        if (password == null || password.isBlank() || password.length() < 8 || password.length() > 64
+                || password.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72) {
+            throw new ResponseStatusException(BAD_REQUEST, "密码需要 8～64 个字符；较长的中文密码请适当缩短。");
+        }
+        UserEntity entity = userMapper.selectAccountById(userId);
+        if (entity == null || !"ACTIVE".equalsIgnoreCase(entity.getStatus())) {
+            throw new ResponseStatusException(UNAUTHORIZED, "账号不可用，请联系管理员。");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        entity.setPasswordHash(passwordEncoder.encode(password));
+        entity.setAuthVersion(authVersion(entity) + 1);
+        entity.setPasswordChangedAt(now);
+        entity.setLastLoginAt(now);
+        entity.setUpdatedAt(now);
+        userMapper.updateById(entity);
+        authSessionService.revokeAll(userId, "EMAIL_PASSWORD_RESET");
+        return createSession(entity, userAgent, remoteAddress);
+    }
+
     public AuthServiceImpl(
             UserMapper userMapper,
             PasswordEncoder passwordEncoder,

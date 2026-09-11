@@ -110,6 +110,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
             keys.add(new LimitKey("auth:captcha:ip:" + ip, 20));
         } else if (path.contains("/auth/email/")) {
             keys.add(new LimitKey("auth:email:ip:" + ip, 10));
+            if (path.endsWith("/auth/email/password/login")) {
+                String email = bodyField(request, "email");
+                if (!email.isBlank()) keys.add(new LimitKey("auth:email:password:" + digest(email.toLowerCase(Locale.ROOT)),
+                        positive(properties.loginUsernamePerMinute(), 10)));
+            }
         } else if (path.endsWith("/auth/login")) {
             keys.add(new LimitKey("auth:login:ip:" + ip, positive(properties.authPerMinute(), 20)));
             String username = username(request);
@@ -174,12 +179,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     private String username(HttpServletRequest request) {
+        return bodyField(request, "username");
+    }
+
+    private String bodyField(HttpServletRequest request, String field) {
         if (!(request instanceof BufferedRequest bufferedRequest)) {
             return "";
         }
         try {
             JsonNode body = objectMapper.readTree(bufferedRequest.body());
-            return body == null ? "" : body.path("username").asText("").trim();
+            return body == null ? "" : body.path(field).asText("").trim();
         } catch (IOException exception) {
             return "";
         }
@@ -188,7 +197,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static boolean requiresAuthBody(HttpServletRequest request) {
         String path = request.getRequestURI();
         return "POST".equalsIgnoreCase(request.getMethod())
-                && (path.endsWith("/auth/login") || path.endsWith("/auth/register") || path.contains("/auth/captcha/"));
+                && (path.endsWith("/auth/login") || path.endsWith("/auth/register")
+                    || path.endsWith("/auth/email/password/login") || path.contains("/auth/captcha/"));
     }
 
     private String refreshCookie(HttpServletRequest request) {

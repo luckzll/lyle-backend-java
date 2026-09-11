@@ -108,7 +108,7 @@ class HumanVerificationServiceTest {
     }
     @Test void expiredChallengeAndMalformedTokensAreRejected() {
         assertThrows(ResponseStatusException.class,()->service.solve("SLIDER_"+"a".repeat(32),new ImageCaptchaTrack(),request));
-        for (String token : new String[]{"", "forged", "a".repeat(43)}) assertThrows(ResponseStatusException.class,()->service.verify(token,null,request));
+        for (String token : new String[]{null, "", "forged", "a".repeat(43)}) assertThrows(ResponseStatusException.class,()->service.verify(token,null,request));
     }
     @Test void proofCannotMoveToAnotherIp() throws Exception {
         var image=service.challenge(request);
