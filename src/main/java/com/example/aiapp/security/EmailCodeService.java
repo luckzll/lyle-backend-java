@@ -6,6 +6,8 @@ import java.time.Duration;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,6 +21,16 @@ import static org.springframework.http.HttpStatus.*;
 
 @Service
 public class EmailCodeService {
+    private static final Logger log = LoggerFactory.getLogger(EmailCodeService.class);
+
+    private ResponseStatusException retryable(org.springframework.http.HttpStatus status, String message, String identity) {
+        Long ttl = redis.getExpire("lyle:email:cooldown:" + identity);
+        var headers = new org.springframework.http.HttpHeaders();
+        if (ttl != null && ttl > 0) headers.set("Retry-After", Long.toString(ttl));
+        return new ResponseStatusException(status, message) {
+            @Override public org.springframework.http.HttpHeaders getHeaders() { return headers; }
+        };
+    }
     // Atomic rate limits survive restarts; no in-memory fallback for authentication.
     private static final DefaultRedisScript<Long> LIMIT = new DefaultRedisScript<>("""
         local n = redis.call('INCR', KEYS[1])
@@ -81,7 +93,7 @@ public class EmailCodeService {
         String key = "lyle:email:code:" + hash(purpose + ":" + email);
         try {
             if (!Boolean.TRUE.equals(redis.opsForValue().setIfAbsent("lyle:email:cooldown:" + identity, "1", Duration.ofSeconds(60))))
-                throw new ResponseStatusException(TOO_MANY_REQUESTS, "请等待60秒后再发送。");
+                throw retryable(TOO_MANY_REQUESTS, "发送间隔过短，请等待倒计时结束后再发送。", identity);
             Long count = redis.execute(LIMIT, List.of("lyle:email:hour:" + identity), "3600");
             if (count == null || count > 10) throw new ResponseStatusException(TOO_MANY_REQUESTS, "发送次数过多，请稍后再试。");
             // Sending again does not reset the failed-attempt budget.
@@ -98,8 +110,12 @@ public class EmailCodeService {
                         VerificationEmail.html(code, purpose.startsWith("bind:")));
                 mail.send(message);
             } catch (Exception e) {
+                Throwable cause = e;
+                while (cause.getCause() != null && cause.getCause() != cause) cause = cause.getCause();
+                // Never log message bodies, codes, addresses or SMTP credentials.
+                log.warn("Email delivery failed: exception={}, rootCause={}", e.getClass().getSimpleName(), cause.getClass().getSimpleName());
                 redis.delete(key);
-                throw new ResponseStatusException(SERVICE_UNAVAILABLE, "邮件发送失败，请稍后重试。");
+                throw retryable(SERVICE_UNAVAILABLE, "邮件发送失败，请稍后重试。", identity);
             }
         } catch (ResponseStatusException e) { throw e; }
         catch (RuntimeException e) { throw new ResponseStatusException(SERVICE_UNAVAILABLE, "邮箱验证服务暂不可用。"); }
