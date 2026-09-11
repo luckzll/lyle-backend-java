@@ -55,7 +55,9 @@ class EmailCodeServiceTest {
     }
     @Test void cooldownPreventsSending() {
         when(values.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(false);
-        assertThatThrownBy(() -> service.send("a@example.com", "login")).isInstanceOf(ResponseStatusException.class);
+        when(redis.getExpire(startsWith("lyle:email:cooldown:"))).thenReturn(37L);
+        var error = catchThrowableOfType(() -> service.send("a@example.com", "login"), ResponseStatusException.class);
+        assertThat(error.getHeaders().getFirst("Retry-After")).isEqualTo("37");
         verifyNoInteractions(mail);
     }
     private static String body(jakarta.mail.Part part, String mime) throws Exception {
@@ -78,7 +80,9 @@ class EmailCodeServiceTest {
     }
     @Test void failedDeliveryInvalidatesCode() {
         doThrow(new MailSendException("smtp failure")).when(mail).send(any(MimeMessage.class));
-        assertThatThrownBy(() -> service.send("a@example.com", "login")).isInstanceOf(ResponseStatusException.class);
+        when(redis.getExpire(startsWith("lyle:email:cooldown:"))).thenReturn(42L);
+        var error = catchThrowableOfType(() -> service.send("a@example.com", "login"), ResponseStatusException.class);
+        assertThat(error.getHeaders().getFirst("Retry-After")).isEqualTo("42");
         verify(redis).delete(startsWith("lyle:email:code:"));
     }
     @Test void invalidOrConsumedCodeCannotAuthenticate() {

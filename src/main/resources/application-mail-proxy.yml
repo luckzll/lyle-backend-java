@@ -1,0 +1,7 @@
+# Opt in with SPRING_PROFILES_ACTIVE=production,mail-proxy.
+# JavaMail SMTP uses its own HTTP CONNECT proxy, independently of HTTP_PROXY.
+spring:
+  mail:
+    properties:
+      mail.smtp.proxy.host: ${MAIL_PROXY_HOST}
+      mail.smtp.proxy.port: ${MAIL_PROXY_PORT:7890}
