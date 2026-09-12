@@ -56,6 +56,7 @@ public class ChatServiceImpl implements ChatService {
             "https?://\\S+\\.(?:png|jpe?g|webp|gif)(?:\\?\\S*)?",
             Pattern.CASE_INSENSITIVE
     );
+    private static final Pattern SSE_FRAME_SEPARATOR = Pattern.compile("\\r?\\n\\r?\\n");
 
     private final AiServiceClient aiServiceClient;
     private final AiConfigService aiConfigService;
@@ -65,6 +66,7 @@ public class ChatServiceImpl implements ChatService {
     private final ChatDebugMetadataSanitizer chatDebugMetadataSanitizer;
     private ChatAttachmentService chatAttachmentService;
     private KnowledgeBaseMapper knowledgeBaseMapper;
+    private KnowledgeRetrievalScopeService knowledgeRetrievalScopeService;
     private UsageService usageService;
     private BillingService billingService;
     private final ConcurrentMap<String, ActiveTurn> activeTurns = new ConcurrentHashMap<>();
@@ -95,6 +97,11 @@ public class ChatServiceImpl implements ChatService {
     }
 
     @Autowired
+    void setKnowledgeRetrievalScopeService(KnowledgeRetrievalScopeService service) {
+        this.knowledgeRetrievalScopeService = service;
+    }
+
+    @Autowired
     void setUsageService(UsageService usageService) {
         this.usageService = usageService;
     }
@@ -107,6 +114,8 @@ public class ChatServiceImpl implements ChatService {
     @Override
     public ChatResponseVO send(Long userId, ChatRequestDTO request) {
         ensureKnowledgeBasesOwnedByUser(userId, request.knowledgeBaseIds());
+        Map<String, Object> knowledgeScope = knowledgeRetrievalScopeService == null ? Map.of()
+                : knowledgeRetrievalScopeService.build(userId, request.knowledgeBaseIds(), false);
         String conversationId = StringUtils.isBlank(request.conversationId())
                 ? UUID.randomUUID().toString()
                 : request.conversationId();
@@ -158,7 +167,8 @@ public class ChatServiceImpl implements ChatService {
                 reservation == null ? null : reservation.traceId(),
                 reservation == null ? null : reservation.reservationId(),
                 usageBudget(reservation),
-                String.valueOf(userEntity.getId())
+                String.valueOf(userEntity.getId()),
+                knowledgeScope
         );
         AiChatResponseDTO aiResponse;
         try {
@@ -209,6 +219,8 @@ public class ChatServiceImpl implements ChatService {
     @Override
     public void stream(Long userId, ChatRequestDTO request, Consumer<String> chunkConsumer) {
         ensureKnowledgeBasesOwnedByUser(userId, request.knowledgeBaseIds());
+        Map<String, Object> knowledgeScope = knowledgeRetrievalScopeService == null ? Map.of()
+                : knowledgeRetrievalScopeService.build(userId, request.knowledgeBaseIds(), false);
         String conversationId = StringUtils.isBlank(request.conversationId())
                 ? UUID.randomUUID().toString()
                 : request.conversationId();
@@ -296,11 +308,13 @@ public class ChatServiceImpl implements ChatService {
                 reservation == null ? null : reservation.traceId(),
                 reservation == null ? null : reservation.reservationId(),
                 usageBudget(reservation),
-                String.valueOf(sourceUserEntity.getId())
+                String.valueOf(sourceUserEntity.getId()),
+                knowledgeScope
         );
         StringBuilder assistantAnswer = new StringBuilder();
         StringBuilder sseBuffer = new StringBuilder();
         AtomicReference<String> upstreamPhase = new AtomicReference<>();
+        AtomicBoolean upstreamDone = new AtomicBoolean();
         Map<String, Object> initialMetadata = new LinkedHashMap<>();
         initialMetadata.put("turnId", turnId);
         initialMetadata.put("phase", "THINKING");
@@ -338,6 +352,8 @@ public class ChatServiceImpl implements ChatService {
                 "message", "正在理解你的需求…"
         )));
         AtomicBoolean responding = new AtomicBoolean();
+        AtomicBoolean textDirty = new AtomicBoolean();
+        java.util.concurrent.atomic.AtomicLong lastTextSave = new java.util.concurrent.atomic.AtomicLong();
         try {
             aiServiceClient.streamChat(aiRequest)
                     .doOnNext(chunk -> {
@@ -349,14 +365,18 @@ public class ChatServiceImpl implements ChatService {
                                 sseBuffer,
                                 chunk,
                                 upstreamPhase,
-                                event -> applyStreamEvent(activeTurn, event)
+                                upstreamDone,
+                                activeTurn,
+                                event -> {
+                                    synchronized (activeTurn) {
+                                        activeTurn.message().setContent(assistantAnswer.toString());
+                                        applyStreamEvent(activeTurn, event);
+                                    }
+                                },
+                                chunkConsumer
                         );
-                        // Forward the current upstream bytes before publishing a
-                        // derived lifecycle frame. Otherwise a DataBuffer boundary
-                        // inside JSON can cause the lifecycle frame to be injected
-                        // into the middle of that SSE event.
-                        chunkConsumer.accept(chunk);
                         String phase = upstreamPhase.get();
+                        if (receivedDelta) textDirty.set(true);
                         if (receivedDelta
                                 && responding.compareAndSet(false, true)
                                 && (phase == null || "THINKING".equals(phase))) {
@@ -365,46 +385,72 @@ public class ChatServiceImpl implements ChatService {
                                     "phase", "RESPONDING",
                                     "message", "正在回复…"
                             )));
+                            synchronized (activeTurn) {
+                                if (activeTurn.cancelled().get()) return;
+                                activeTurn.metadata().put("phase", "RESPONDING");
+                                activeTurn.metadata().put("statusText", "正在回复…");
+                            }
+                        }
+                        // Keep a recoverable snapshot without issuing a database write per token.
+                        long now = System.nanoTime();
+                        if (textDirty.get() && (lastTextSave.get() == 0
+                                || now - lastTextSave.get() >= 1_000_000_000L)) {
+                            synchronized (activeTurn) {
+                                if (activeTurn.cancelled().get()) return;
+                                persistActiveTurn(activeTurn);
+                            }
+                            textDirty.set(false);
+                            lastTextSave.set(now);
                         }
                     })
                     .blockLast();
             if (activeTurn.cancelled().get()) {
                 return;
             }
+            if (!upstreamDone.get()) {
+                throw new IllegalStateException("AI stream ended without a completion event");
+            }
             String finalUpstreamPhase = upstreamPhase.get();
-            if (!"COMPLETED".equals(finalUpstreamPhase) && !"FAILED".equals(finalUpstreamPhase)) {
+            synchronized (activeTurn) {
+                if (!"FAILED".equals(finalUpstreamPhase)) {
+                    activeTurn.metadata().put("phase", "COMPLETED");
+                    activeTurn.metadata().put("statusText", "回复完成");
+                }
+                activeTurn.message().setContent(assistantAnswer.toString());
+                persistActiveTurn(activeTurn);
+            }
+            if (!"FAILED".equals(finalUpstreamPhase)) {
                 chunkConsumer.accept(sse("turn.status", Map.of(
                         "turnId", turnId,
                         "phase", "COMPLETED",
                         "message", "回复完成"
                 )));
-                synchronized (activeTurn) {
-                    activeTurn.metadata().put("phase", "COMPLETED");
-                    activeTurn.metadata().put("statusText", "回复完成");
-                }
             }
-            synchronized (activeTurn) {
-                activeTurn.message().setContent(assistantAnswer.toString());
-                persistActiveTurn(activeTurn);
-            }
+            // Completion is observable only after the final durable snapshot is saved.
+            chunkConsumer.accept(sse("done", Map.of("turnId", turnId)));
         } catch (RuntimeException exception) {
             if (activeTurn.cancelled().get() || exception instanceof ChatTurnCancelledException) {
                 return;
             }
+            String failureMessage = streamFailureMessage(exception);
+            List<Map<String, Object>> interruptedSteps;
             synchronized (activeTurn) {
                 activeTurn.metadata().put("phase", "FAILED");
-                activeTurn.metadata().put("statusText", "回复失败");
+                activeTurn.metadata().put("statusText", failureMessage);
                 failUnfinishedImageItems(activeTurn.metadata(), "图片任务已中断");
+                interruptedSteps = interruptRunningSteps(activeTurn.metadata(), "已中断：" + failureMessage);
                 activeTurn.message().setContent(
-                        assistantAnswer.isEmpty() ? "回复失败，请稍后重试。" : assistantAnswer.toString()
+                        assistantAnswer.isEmpty() ? failureMessage : assistantAnswer.toString()
                 );
                 persistActiveTurn(activeTurn);
             }
+            interruptedSteps.forEach(step -> chunkConsumer.accept(sse("agent.step", step)));
             chunkConsumer.accept(sse("turn.status", Map.of(
                     "turnId", turnId,
                     "phase", "FAILED",
-                    "message", "回复失败"
+                    "message", failureMessage
             )));
+            chunkConsumer.accept(sse("error", Map.of("turnId", turnId, "message", failureMessage)));
             throw exception;
         } finally {
             activeTurns.remove(turnId, activeTurn);
@@ -443,16 +489,23 @@ public class ChatServiceImpl implements ChatService {
             StringBuilder sseBuffer,
             String chunk,
             AtomicReference<String> upstreamPhase,
-            Consumer<StreamEvent> eventConsumer
+            AtomicBoolean upstreamDone,
+            ActiveTurn activeTurn,
+            Consumer<StreamEvent> eventConsumer,
+            Consumer<String> downstream
     ) {
         boolean receivedDelta = false;
         sseBuffer.append(chunk);
-        int eventEnd;
-        while ((eventEnd = sseBuffer.indexOf("\n\n")) >= 0) {
-            String eventBlock = sseBuffer.substring(0, eventEnd);
-            sseBuffer.delete(0, eventEnd + 2);
-            receivedDelta |= appendStreamEvent(builder, eventBlock, upstreamPhase, eventConsumer);
+        Matcher separator = SSE_FRAME_SEPARATOR.matcher(sseBuffer);
+        while (separator.find()) {
+            String eventBlock = sseBuffer.substring(0, separator.start());
+            sseBuffer.delete(0, separator.end());
+            if (eventBlock.length() > 1_048_576) throw new IllegalStateException("AI stream frame exceeds limit");
+            receivedDelta |= appendStreamEvent(builder, eventBlock, upstreamPhase, upstreamDone,
+                    activeTurn, eventConsumer, downstream);
+            separator = SSE_FRAME_SEPARATOR.matcher(sseBuffer);
         }
+        if (sseBuffer.length() > 1_048_576) throw new IllegalStateException("AI stream frame exceeds limit");
         return receivedDelta;
     }
 
@@ -460,41 +513,88 @@ public class ChatServiceImpl implements ChatService {
             StringBuilder builder,
             String eventBlock,
             AtomicReference<String> upstreamPhase,
-            Consumer<StreamEvent> eventConsumer
+            AtomicBoolean upstreamDone,
+            ActiveTurn activeTurn,
+            Consumer<StreamEvent> eventConsumer,
+            Consumer<String> downstream
     ) {
-        String currentEvent = "";
-        for (String line : eventBlock.split("\\n")) {
-            if (line.startsWith("event: ")) {
-                currentEvent = line.substring("event: ".length()).trim();
-                continue;
-            }
-            if (!line.startsWith("data: ")) {
-                continue;
-            }
-            try {
-                Map<String, Object> data = objectMapper.readValue(
-                        line.substring("data: ".length()),
-                        new TypeReference<>() {
-                        }
-                );
-                eventConsumer.accept(new StreamEvent(currentEvent, data));
-                if ("delta".equals(currentEvent)) {
-                    Object text = data.get("text");
-                    if (text != null) {
-                        builder.append(text);
-                    }
-                    return true;
-                }
-                if ("turn.status".equals(currentEvent) && data.get("phase") != null) {
-                    upstreamPhase.set(String.valueOf(data.get("phase")));
-                } else if ("error".equals(currentEvent)) {
-                    upstreamPhase.set("FAILED");
-                }
-            } catch (Exception ignored) {
-                // Streaming chunks are still forwarded to the client even if local history extraction misses one.
+        if (upstreamDone.get()) return false;
+        String currentEvent = "message";
+        StringBuilder payload = new StringBuilder();
+        boolean heartbeat = false;
+        for (String line : eventBlock.split("\\r?\\n")) {
+            if (line.startsWith(":")) {
+                heartbeat = true;
+            } else if (line.startsWith("event:")) {
+                currentEvent = line.substring(6).strip();
+            } else if (line.startsWith("data:")) {
+                if (!payload.isEmpty()) payload.append('\n');
+                payload.append(line.substring(5).stripLeading());
             }
         }
-        return false;
+        if (payload.isEmpty()) {
+            if (heartbeat) downstream.accept(": keep-alive\n\n");
+            return false;
+        }
+        Map<String, Object> data;
+        try {
+            data = objectMapper.readValue(payload.toString(), new TypeReference<>() {});
+        } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
+            throw new IllegalStateException("Invalid AI stream event", exception);
+        }
+        if ("done".equals(currentEvent)) {
+            upstreamDone.set(true);
+            return false;
+        }
+        if ("agent.step".equals(currentEvent)) {
+            Object sourceTurnId = data.get("turnId");
+            if (sourceTurnId != null && !activeTurn.turnId().equals(sourceTurnId)) return false;
+            data = chatDebugMetadataSanitizer.progressEvent(data, activeTurn.turnId());
+            if (data.isEmpty() || !isNewProgress(activeTurn, data)) return false;
+        }
+        if ("meta".equals(currentEvent)) {
+            data.remove("agentProgress");
+        }
+        if ("turn.status".equals(currentEvent) && "COMPLETED".equals(data.get("phase"))) {
+            // A terminal status without the protocol's done marker is an interrupted response.
+            upstreamPhase.set("COMPLETED");
+            return false;
+        }
+        boolean receivedDelta = "delta".equals(currentEvent) && data.get("text") instanceof String text
+                && !text.isEmpty();
+        if (receivedDelta) builder.append(data.get("text"));
+        eventConsumer.accept(new StreamEvent(currentEvent, data));
+        if ("turn.status".equals(currentEvent) && data.get("phase") != null) {
+            upstreamPhase.set(String.valueOf(data.get("phase")));
+        } else if ("error".equals(currentEvent)) {
+            upstreamPhase.set("FAILED");
+        }
+        // Forward complete frames: lifecycle events and heartbeats can never split upstream JSON.
+        downstream.accept(sse(currentEvent, data));
+        return receivedDelta;
+    }
+
+    private boolean isNewProgress(ActiveTurn activeTurn, Map<String, Object> data) {
+        synchronized (activeTurn) {
+            if (activeTurn.metadata().get("agentProgress") instanceof List<?> progress) {
+                for (Object item : progress) {
+                    if (item instanceof Map<?, ?> previous && data.get("step").equals(previous.get("step"))
+                            && ((Number) previous.get("sequence")).longValue()
+                            >= ((Number) data.get("sequence")).longValue()) return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    private String streamFailureMessage(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.util.concurrent.TimeoutException
+                    || cause.getClass().getSimpleName().contains("Timeout")) {
+                return "AI 服务响应超时，已保留生成内容，请稍后重试。";
+            }
+        }
+        return "AI 回复连接中断，已保留生成内容，请稍后重试。";
     }
 
     private void applyStreamEvent(ActiveTurn activeTurn, StreamEvent event) {
@@ -506,6 +606,20 @@ public class ChatServiceImpl implements ChatService {
             Map<String, Object> metadata = activeTurn.metadata();
             Map<String, Object> data = event.data();
             switch (event.name()) {
+                case "agent.step" -> {
+                    List<Map<String, Object>> progress = new ArrayList<>();
+                    if (metadata.get("agentProgress") instanceof List<?> previous) {
+                        for (Object item : previous) {
+                            if (item instanceof Map<?, ?> step && !data.get("step").equals(step.get("step"))) {
+                                progress.add(mapValue(step));
+                            }
+                        }
+                    }
+                    progress.add(data);
+                    progress.sort(java.util.Comparator.comparingLong(item -> ((Number) item.get("sequence")).longValue()));
+                    metadata.put("agentProgress", progress);
+                    changed = true;
+                }
                 case "turn.status" -> {
                     String phase = stringValue(data.get("phase"));
                     if (data.get("phase") != null) {
@@ -516,6 +630,7 @@ public class ChatServiceImpl implements ChatService {
                     }
                     if ("FAILED".equals(phase)) {
                         failUnfinishedImageItems(metadata, "图片任务已中断");
+                        interruptRunningSteps(metadata, "已中断，未收到该步骤的完成结果。");
                     }
                     changed = true;
                 }
@@ -534,6 +649,8 @@ public class ChatServiceImpl implements ChatService {
                 case "meta" -> {
                     Map<String, Object> rawDebug = new LinkedHashMap<>(metadata);
                     rawDebug.putAll(data);
+                    // Final diagnostics cannot overwrite the accepted, ordered live progress.
+                    rawDebug.remove("agentProgress");
                     // Only ids already validated against the current user may reach durable metadata.
                     rawDebug.put("knowledgeBaseIds", metadata.getOrDefault("knowledgeBaseIds", List.of()));
                     rawDebug.put(
@@ -548,10 +665,11 @@ public class ChatServiceImpl implements ChatService {
                     metadata.put("phase", "FAILED");
                     metadata.put("statusText", "回复失败");
                     failUnfinishedImageItems(metadata, stringValue(data.get("message")));
+                    interruptRunningSteps(metadata, "已中断，未收到该步骤的完成结果。");
                     changed = true;
                 }
                 default -> {
-                    // Text deltas are accumulated and persisted once the turn reaches a terminal state.
+                    // Text deltas are checkpointed by the stream loop at a bounded frequency.
                 }
             }
             if (changed) {
@@ -756,6 +874,7 @@ public class ChatServiceImpl implements ChatService {
     private void markTurnCancelled(Map<String, Object> metadata, ChatMessageEntity message) {
         metadata.put("phase", "FAILED");
         metadata.put("statusText", "已停止生成");
+        interruptRunningSteps(metadata, "已中断：用户停止了本轮生成。");
         if (metadata.get("imageBatch") instanceof Map<?, ?> rawBatch) {
             Map<String, Object> batch = (Map<String, Object>) rawBatch;
             batch.put("status", "CANCELLED");
@@ -777,6 +896,29 @@ public class ChatServiceImpl implements ChatService {
         } else if (!content.contains("已停止生成。")) {
             message.setContent(content + "\n\n已停止生成。");
         }
+    }
+
+    private List<Map<String, Object>> interruptRunningSteps(Map<String, Object> metadata, String reason) {
+        if (!(metadata.get("agentProgress") instanceof List<?> previous)) return List.of();
+        long sequence = previous.stream().filter(Map.class::isInstance).map(Map.class::cast)
+                .map(item -> item.get("sequence")).filter(Number.class::isInstance).map(Number.class::cast)
+                .mapToLong(Number::longValue).max().orElse(0);
+        List<Map<String, Object>> progress = new ArrayList<>();
+        List<Map<String, Object>> interrupted = new ArrayList<>();
+        for (Object item : previous) {
+            if (!(item instanceof Map<?, ?> source)) continue;
+            Map<String, Object> step = mapValue(source);
+            if ("running".equals(step.get("status"))) {
+                step.put("status", "failed");
+                step.put("summary", reason);
+                step.put("sequence", ++sequence);
+                interrupted.add(step);
+            }
+            progress.add(step);
+        }
+        progress.sort(java.util.Comparator.comparingLong(step -> ((Number) step.get("sequence")).longValue()));
+        metadata.put("agentProgress", progress);
+        return interrupted;
     }
 
     @SuppressWarnings("unchecked")

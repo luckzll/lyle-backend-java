@@ -51,6 +51,9 @@ public class KnowledgeFileEntity {
     @TableField("parse_status")
     private String parseStatus;
 
+    @TableField("retrieval_revision")
+    private String retrievalRevision;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 }

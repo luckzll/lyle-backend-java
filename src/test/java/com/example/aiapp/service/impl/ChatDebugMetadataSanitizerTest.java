@@ -13,8 +13,44 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ChatDebugMetadataSanitizerTest {
 
+    @Test
+    void retainsSafeCacheCountersAndResolutionWithoutInternalManifest() {
+        var sanitizer = new ChatDebugMetadataSanitizer(new ObjectMapper());
+        var plan = Map.of("actualQueryCount", 2, "candidateCache", Map.of("hit", 1, "miss", 1, "privateCacheKey", "private"),
+                "queryResolution", Map.of("method", "rule", "effectiveQuestion", "2.4.1 具体改了什么", "history", "private"),
+                "documentRevisions", Map.of("private", "internal"));
+        var result = sanitizer.sanitize(Map.of("agentTrace", List.of(Map.of("agent", "rag_agent", "retrievalPlan", plan))));
+        assertThat(result.toString()).contains("actualQueryCount=2", "hit=1", "miss=1", "2.4.1")
+                .doesNotContain("private", "documentRevisions", "history");
+    }
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ChatDebugMetadataSanitizer sanitizer = new ChatDebugMetadataSanitizer(objectMapper);
+
+    @Test
+    void retainsAllFourQueryTimingsAndLaterTotalsButRejectsUnknownKeys() {
+        Map<String, Object> timings = new LinkedHashMap<>();
+        for (int query = 1; query <= 4; query++) {
+            timings.put("query_" + query + "_ms", 100);
+            for (String phase : List.of("recall", "embedding", "vector_search", "keyword_search", "rerank", "merge", "parent_expansion", "qdrant_prepare")) {
+                timings.put("query_" + query + "_" + phase + "_ms", 10);
+            }
+        }
+        timings.put("sufficiency_ms", 15);
+        timings.put("diagnostics_ms", 2);
+        timings.put("total_ms", 450);
+        timings.put("private_database_name", 123);
+        timings.put("query_5_ms", 123);
+        timings.put("query_1_sufficiency_ms", 123);
+        var step = sanitizer.progressEvent(Map.of("sequence", 1, "step", "rag_agent", "status", "completed", "timings", timings), "turn-1");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> safe = (Map<String, Object>) step.get("timings");
+        assertThat(safe).hasSize(39).containsKeys("query_4_parent_expansion_ms", "sufficiency_ms", "total_ms")
+                .doesNotContainKeys("private_database_name", "query_5_ms", "query_1_sufficiency_ms");
+        var metadata = sanitizer.sanitize(Map.of("agentTrace", List.of(Map.of("agent", "rag_agent", "timings", timings))));
+        assertThat(metadata.toString()).contains("query_4_parent_expansion_ms", "sufficiency_ms", "total_ms")
+                .doesNotContain("private_database_name", "query_5_ms");
+    }
 
     @Test
     void rebuildsDebugMetadataWithoutRawContextsResultsReasoningOrCredentials() throws Exception {

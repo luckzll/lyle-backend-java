@@ -32,6 +32,20 @@ final class ChatDebugMetadataSanitizer {
     private static final int MAX_TOOL_ITEMS = 20;
     private static final int MAX_MEMORY_ITEMS = 20;
     private static final int MAX_KNOWLEDGE_BASE_IDS = 20;
+    private static final Set<String> PROGRESS_STEPS = Set.of(
+            "supervisor_agent", "memory_agent", "rag_agent", "tool_agent", "gather_agent",
+            "project_resolver", "writer_agent", "reviewer_agent"
+    );
+    private static final Set<String> PROGRESS_STATUSES = Set.of("running", "completed", "failed", "skipped");
+    private static final Set<String> TIMING_KEYS = Set.of(
+            "query_rewrite_ms", "recall_ms", "embedding_ms", "vector_search_ms", "keyword_search_ms",
+            "rerank_ms", "sufficiency_ms", "merge_ms", "parent_expansion_ms", "qdrant_prepare_ms",
+            "diagnostics_ms", "total_ms", "writer_first_token_ms", "first_delta_ms", "writer_ms",
+            "review_ms", "prepare_context_ms"
+    );
+    private static final Pattern QUERY_TIMING_KEY = Pattern.compile(
+            "query_[1-4](?:_(?:recall|embedding|vector_search|keyword_search|rerank|merge|parent_expansion|qdrant_prepare))?_ms"
+    );
 
     private static final Set<String> USAGE_SOURCES = Set.of(
             "PROVIDER_REPORTED", "ESTIMATED", "PARTIAL_ESTIMATE", "PENDING"
@@ -79,6 +93,9 @@ final class ChatDebugMetadataSanitizer {
         safe.put("retrievalScope", retrievalScope(source.get("retrievalScope"), state));
         safe.put("sources", sources(source.get("sources"), state));
         safe.put("agentTrace", agentTrace(source.get("agentTrace"), state));
+        if (source.containsKey("agentProgress")) {
+            safe.put("agentProgress", agentProgress(source.get("agentProgress")));
+        }
         safe.put("toolResults", toolResults(source.get("toolResults"), state));
         safe.put("review", review(source.get("review"), state));
         safe.put("usage", usage(source.get("usage")));
@@ -97,6 +114,61 @@ final class ChatDebugMetadataSanitizer {
         enforceTotalLimit(safe, state);
         safe.put("debugTruncated", state.truncated);
         return safe;
+    }
+
+    Map<String, Object> progressEvent(Map<String, ?> source, String turnId) {
+        if (source == null || !(source.get("step") instanceof String step) || !PROGRESS_STEPS.contains(step)
+                || !(source.get("status") instanceof String status) || !PROGRESS_STATUSES.contains(status)
+                || !(source.get("sequence") instanceof Number sequence)
+                || !Double.isFinite(sequence.doubleValue()) || sequence.longValue() < 1
+                || sequence.doubleValue() != sequence.longValue() || sequence.longValue() > 9_007_199_254_740_991L) {
+            return Map.of();
+        }
+        Map<String, Object> safe = new LinkedHashMap<>();
+        safe.put("turnId", turnId);
+        safe.put("sequence", sequence.longValue());
+        safe.put("step", source.get("step"));
+        safe.put("status", source.get("status"));
+        putDuration(safe, "durationMs", source.get("durationMs"));
+        putText(safe, "summary", source.get("summary"), 300, new LimitState());
+        Map<String, Object> timings = timings(source.get("timings"));
+        if (!timings.isEmpty()) safe.put("timings", timings);
+        return safe;
+    }
+
+    private List<Map<String, Object>> agentProgress(Object value) {
+        Map<String, Map<String, Object>> latest = new LinkedHashMap<>();
+        for (Object item : list(value).stream().limit(64).toList()) {
+            Map<?, ?> raw = map(item);
+            Map<String, Object> source = new LinkedHashMap<>();
+            raw.forEach((key, data) -> source.put(String.valueOf(key), data));
+            Map<String, Object> event = progressEvent(source, text(source.get("turnId"), 160, new LimitState()));
+            if (event.isEmpty()) continue;
+            String step = String.valueOf(event.get("step"));
+            Map<String, Object> previous = latest.get(step);
+            if (previous == null || ((Number) event.get("sequence")).longValue()
+                    > ((Number) previous.get("sequence")).longValue()) latest.put(step, event);
+        }
+        return new ArrayList<>(latest.values());
+    }
+
+    private Map<String, Object> timings(Object value) {
+        Map<String, Object> safe = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : map(value).entrySet()) {
+            String key = String.valueOf(entry.getKey());
+            if (TIMING_KEYS.contains(key) || QUERY_TIMING_KEY.matcher(key).matches()) {
+                putDuration(safe, key, entry.getValue());
+            }
+            if (safe.size() >= 64) break;
+        }
+        return safe;
+    }
+
+    private void putDuration(Map<String, Object> target, String key, Object value) {
+        if (value instanceof Number number && Double.isFinite(number.doubleValue())
+                && number.doubleValue() >= 0 && number.doubleValue() <= 86_400_000) {
+            target.put(key, number.doubleValue());
+        }
     }
 
     private List<String> knowledgeBaseIds(Object value, LimitState state) {
@@ -209,6 +281,10 @@ final class ChatDebugMetadataSanitizer {
             if (!writerInput.isEmpty()) result.put("writerInput", writerInput);
             Map<String, Object> memorySummary = memorySummary(source.get("memorySummary"), state);
             if (!memorySummary.isEmpty()) result.put("memorySummary", memorySummary);
+            Map<String, Object> timings = timings(source.get("timings"));
+            if (!timings.isEmpty()) result.put("timings", timings);
+            Map<String, Object> plan = retrievalPlan(source.get("retrievalPlan"), state);
+            if (!plan.isEmpty()) result.put("retrievalPlan", plan);
             safe.add(result);
             if (safe.size() >= MAX_TRACE_ITEMS) break;
         }
@@ -228,6 +304,27 @@ final class ChatDebugMetadataSanitizer {
         putText(safe, "reason", source.get("reason"), 500, state);
         putStringList(safe, "selected_tools", source.get("selected_tools"), 20, 80, state);
         putStringList(safe, "rule_selected_tools", source.get("rule_selected_tools"), 20, 80, state);
+        return safe;
+    }
+
+    private Map<String, Object> retrievalPlan(Object value, LimitState state) {
+        Map<?, ?> source = map(value);
+        if (source.isEmpty()) return Map.of();
+        Map<String, Object> safe = new LinkedHashMap<>();
+        for (String key : List.of("mode", "fusionMode")) putText(safe, key, source.get(key), 40, state);
+        for (String key : List.of("actualQueryCount", "candidateCount", "rerankSelectedCount", "parallelWorkers")) {
+            copyCount(source, safe, key);
+        }
+        copyBoolean(source, safe, "adaptiveUsed");
+        Map<?, ?> cache = map(source.get("candidateCache"));
+        Map<String, Object> safeCache = new LinkedHashMap<>();
+        for (String key : List.of("hit", "miss", "shared", "bypass")) copyCount(cache, safeCache, key);
+        if (!safeCache.isEmpty()) safe.put("candidateCache", safeCache);
+        Map<?, ?> resolution = map(source.get("queryResolution"));
+        Map<String, Object> safeResolution = new LinkedHashMap<>();
+        for (String key : List.of("method", "reason")) putText(safeResolution, key, resolution.get(key), 160, state);
+        for (String key : List.of("originalQuestion", "effectiveQuestion")) putText(safeResolution, key, resolution.get(key), 500, state);
+        if (!safeResolution.isEmpty()) safe.put("queryResolution", safeResolution);
         return safe;
     }
 

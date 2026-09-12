@@ -205,6 +205,9 @@ class ControllerIntegrationTest {
     FileService fileService;
 
     @MockBean
+    com.example.aiapp.service.impl.KnowledgeRetrievalScopeService knowledgeRetrievalScopes;
+
+    @MockBean
     ChatService chatService;
 
     @MockBean(name = "chatGenerationExecutor")

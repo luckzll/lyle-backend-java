@@ -16,12 +16,13 @@
         <result column="file_size" property="fileSize"/>
         <result column="visibility" property="visibility"/>
         <result column="parse_status" property="parseStatus"/>
+        <result column="retrieval_revision" property="retrievalRevision"/>
         <result column="created_at" property="createdAt"/>
     </resultMap>
 
     <sql id="Base_Column_List">
         id, knowledge_base_id, file_name, storage_path, storage_provider, bucket,
-        object_key, original_name, content_type, file_size, visibility, parse_status, created_at
+        object_key, original_name, content_type, file_size, visibility, parse_status, retrieval_revision, created_at
     </sql>
 
     <select id="selectByKnowledgeBaseId" resultMap="BaseResultMap">
@@ -43,6 +44,12 @@
         DELETE FROM knowledge_file
         WHERE knowledge_base_id = #{knowledgeBaseId}
     </delete>
+
+    <update id="updateParseStatusIfRevision">
+        UPDATE knowledge_file SET parse_status = #{status}
+        WHERE id = #{id} AND knowledge_base_id = #{knowledgeBaseId}
+          AND retrieval_revision = #{revision}
+    </update>
 
     <select id="selectPageByKnowledgeBaseId" resultMap="BaseResultMap">
         SELECT <include refid="Base_Column_List"/>
