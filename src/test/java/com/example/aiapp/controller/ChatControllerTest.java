@@ -25,6 +25,89 @@ import static org.mockito.Mockito.mock;
 class ChatControllerTest {
 
     @Test
+    void preflightRejectionPublishesExplicitFailureWithoutADurableTurn() throws Exception {
+        for (var failure : List.of(
+                new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "知识库不存在"),
+                new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.PAYMENT_REQUIRED, "当前 AI 额度不足，请升级套餐或购买额度后主动重试。")
+        )) {
+            ChatService service = mock(ChatService.class);
+            org.mockito.Mockito.doThrow(failure).when(service).stream(eq(42L), any(), any());
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(new CurrentUser(42L, "lyle", "USER"), null));
+            try {
+                var response = new ChatController(service, Runnable::run).stream(new ChatRequestDTO("100", "turn-rejected", null, "你好", List.of()));
+                java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+                response.writeTo(output);
+                assertThat(output.toString(java.nio.charset.StandardCharsets.UTF_8))
+                        .contains("event: turn.status", "\"phase\":\"FAILED\"", "turn-rejected", failure.getReason(), "event: error")
+                        .doesNotContain("event: done");
+            } finally {
+                SecurityContextHolder.clearContext();
+            }
+        }
+    }
+
+    @Test
+    void unexpectedFailureDoesNotExposeSqlOrCredentialsAndPreservesAnExistingTerminalEvent() throws Exception {
+        for (boolean alreadyFailed : List.of(false, true)) {
+            ChatService service = mock(ChatService.class);
+            doAnswer(invocation -> {
+                if (alreadyFailed) {
+                    Consumer<String> publish = invocation.getArgument(2);
+                    publish.accept("event: turn.status\ndata: {\"phase\":\"FAILED\",\"message\":\"AI 服务响应超时\"}\n\n");
+                }
+                throw new IllegalStateException("SELECT credential FROM secrets; password=PRIVATE");
+            }).when(service).stream(eq(42L), any(), any());
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(new CurrentUser(42L, "lyle", "USER"), null));
+            try {
+                var response = new ChatController(service, Runnable::run).stream(new ChatRequestDTO("100", "turn-rejected", null, "你好", List.of()));
+                java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+                response.writeTo(output);
+                String text = output.toString(java.nio.charset.StandardCharsets.UTF_8);
+                assertThat(text).contains("\"phase\":\"FAILED\"").doesNotContain("PRIVATE", "SELECT", "credential");
+                if (alreadyFailed) assertThat(text).contains("AI 服务响应超时").doesNotContain("暂时无法处理");
+            } finally {
+                SecurityContextHolder.clearContext();
+            }
+        }
+    }
+
+    @Test
+    void waitingResponseEmitsHeartbeatWithoutManufacturingProgress() throws Exception {
+        ChatController.StreamSession session = new ChatController.StreamSession(5);
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream() {
+            @Override
+            public void flush() {
+                session.complete();
+            }
+        };
+        session.responseBody().writeTo(bytes);
+        assertThat(bytes.toString(java.nio.charset.StandardCharsets.UTF_8)).isEqualTo(": keep-alive\n\n");
+    }
+
+    @Test
+    void slowSubscriberOverflowClosesSubscriptionWithoutBlockingProducer() throws Exception {
+        ChatController.StreamSession session = new ChatController.StreamSession(5);
+        for (int index = 0; index < 10_000; index++) session.publish("event: delta\ndata: {}\n\n");
+        session.complete();
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        session.responseBody().writeTo(bytes);
+        assertThat(bytes.size()).isZero();
+    }
+
+    @Test
+    void largeFramesCannotBypassTheSubscriberMemoryBudget() throws Exception {
+        ChatController.StreamSession session = new ChatController.StreamSession(5);
+        session.publish("x".repeat(600_000));
+        session.publish("y".repeat(600_000));
+        session.complete();
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        session.responseBody().writeTo(bytes);
+        assertThat(bytes.size()).isZero();
+    }
+
+    @Test
     void brokenClientConnectionDoesNotCancelDetachedGeneration() throws Exception {
         ChatService chatService = mock(ChatService.class);
         ExecutorService generationExecutor = Executors.newSingleThreadExecutor();

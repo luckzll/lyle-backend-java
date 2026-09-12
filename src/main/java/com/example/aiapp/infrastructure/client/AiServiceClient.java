@@ -38,7 +38,9 @@ public class AiServiceClient {
     }
 
     public Flux<String> streamChat(AiChatRequestDTO request) {
-        return aiServiceWebClient.post()
+        return Flux.defer(() -> {
+            StreamingUtf8Decoder decoder = new StreamingUtf8Decoder();
+            return aiServiceWebClient.post()
                 .uri("/ai/chat/stream")
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(request)
@@ -46,11 +48,37 @@ public class AiServiceClient {
                 .bodyToFlux(org.springframework.core.io.buffer.DataBuffer.class)
                 .map(dataBuffer -> {
                     try {
-                        return dataBuffer.toString(StandardCharsets.UTF_8);
+                        byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                        dataBuffer.read(bytes);
+                        return decoder.decode(bytes, false);
                     } finally {
                         DataBufferUtils.release(dataBuffer);
                     }
-                });
+                })
+                .concatWith(Flux.defer(() -> Flux.just(decoder.decode(new byte[0], true))))
+                .filter(chunk -> !chunk.isEmpty())
+                .doOnDiscard(org.springframework.core.io.buffer.DataBuffer.class, DataBufferUtils::release);
+        });
+    }
+
+    /** Network buffers may split a UTF-8 code point, so decoding must span buffers. */
+    private static final class StreamingUtf8Decoder {
+        private final java.nio.charset.CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder();
+        private byte[] pending = new byte[0];
+
+        String decode(byte[] bytes, boolean end) {
+            java.nio.ByteBuffer input = java.nio.ByteBuffer.allocate(pending.length + bytes.length);
+            input.put(pending).put(bytes).flip();
+            java.nio.CharBuffer output = java.nio.CharBuffer.allocate(input.remaining() + 1);
+            java.nio.charset.CoderResult result = decoder.decode(input, output, end);
+            if (result.isError()) {
+                throw new IllegalStateException("Invalid UTF-8 in AI stream");
+            }
+            pending = new byte[input.remaining()];
+            input.get(pending);
+            output.flip();
+            return output.toString();
+        }
     }
 
     public AiIngestResponseDTO ingest(AiIngestRequestDTO request) {
@@ -1062,6 +1090,16 @@ public class AiServiceClient {
     public Map<String, Object> debugRag(Map<String, Object> request) {
         return aiServiceWebClient.post()
                 .uri("/ai/rag/debug")
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+    }
+
+    public Map<String, Object> getRagChunksScoped(Map<String, Object> request) {
+        return aiServiceWebClient.post()
+                .uri("/ai/rag/chunks")
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {

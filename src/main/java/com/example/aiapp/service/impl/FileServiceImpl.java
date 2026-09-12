@@ -96,6 +96,7 @@ public class FileServiceImpl implements FileService {
             entity.setFileSize(storedObject.size());
             entity.setVisibility(storedObject.visibility());
             entity.setParseStatus(STATUS_QUEUED);
+            entity.setRetrievalRevision(UUID.randomUUID().toString());
             entity.setCreatedAt(LocalDateTime.now());
             knowledgeFileMapper.insert(entity);
             auditLogService.record(userId, "upload", "knowledge_file", String.valueOf(entity.getId()));
@@ -138,6 +139,7 @@ public class FileServiceImpl implements FileService {
             throw new ResponseStatusException(NOT_FOUND, "文件不存在");
         }
         entity.setParseStatus(STATUS_QUEUED);
+        entity.setRetrievalRevision(UUID.randomUUID().toString());
         knowledgeFileMapper.updateById(entity);
         auditLogService.record(userId, "rebuild", "knowledge_file", String.valueOf(fileId));
         return triggerIngest(userId, entity);
@@ -150,6 +152,7 @@ public class FileServiceImpl implements FileService {
         return entities.stream()
                 .map(entity -> {
                     entity.setParseStatus(STATUS_QUEUED);
+                    entity.setRetrievalRevision(UUID.randomUUID().toString());
                     knowledgeFileMapper.updateById(entity);
                     auditLogService.record(userId, "rebuild", "knowledge_file", String.valueOf(entity.getId()));
                     return triggerIngest(userId, entity);
@@ -200,13 +203,14 @@ public class FileServiceImpl implements FileService {
                     entity.getContentType(),
                     entity.getFileSize(),
                     entity.getVisibility(),
-                    String.valueOf(userId)
+                    String.valueOf(userId),
+                    entity.getRetrievalRevision()
             ));
             entity.setParseStatus(ingestResponse == null ? STATUS_QUEUED : ingestResponse.status());
-            knowledgeFileMapper.updateById(entity);
+            updateIngestStatus(entity);
         } catch (RuntimeException exception) {
             entity.setParseStatus(STATUS_FAILED);
-            knowledgeFileMapper.updateById(entity);
+            updateIngestStatus(entity);
             throw exception;
         }
         return new FileUploadVO(
@@ -232,6 +236,18 @@ public class FileServiceImpl implements FileService {
     private void ensureKnowledgeBaseOwnedByUser(Long userId, Long knowledgeBaseId) {
         if (knowledgeBaseMapper.selectByIdAndUserId(knowledgeBaseId, userId) == null) {
             throw new ResponseStatusException(NOT_FOUND, "知识库不存在");
+        }
+    }
+
+    private void updateIngestStatus(KnowledgeFileEntity entity) {
+        // An older rebuild may finish after a newer one. Never restore its old
+        // revision or overwrite the newer attempt's parse status.
+        int updated = knowledgeFileMapper.updateParseStatusIfRevision(entity.getId(), entity.getKnowledgeBaseId(),
+                entity.getRetrievalRevision(), entity.getParseStatus());
+        if (updated == 0) {
+            KnowledgeFileEntity current = knowledgeFileMapper.selectByIdAndKnowledgeBaseId(
+                    entity.getId(), entity.getKnowledgeBaseId());
+            entity.setParseStatus(current == null ? "deleted" : current.getParseStatus());
         }
     }
 

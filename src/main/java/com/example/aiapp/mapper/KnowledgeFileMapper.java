@@ -24,6 +24,9 @@ public interface KnowledgeFileMapper extends BaseMapper<KnowledgeFileEntity> {
     /** 删除指定知识库的全部文件记录。 */
     int deleteByKnowledgeBaseId(@Param("knowledgeBaseId") Long knowledgeBaseId);
 
+    int updateParseStatusIfRevision(@Param("id") Long id, @Param("knowledgeBaseId") Long knowledgeBaseId,
+                                   @Param("revision") String revision, @Param("status") String status);
+
     /** 分页查询指定知识库的文件。 */
     IPage<KnowledgeFileEntity> selectPageByKnowledgeBaseId(
             Page<KnowledgeFileEntity> page,
