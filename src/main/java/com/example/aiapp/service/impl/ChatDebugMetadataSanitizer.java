@@ -101,7 +101,8 @@ final class ChatDebugMetadataSanitizer {
         Map<String, Object> reasoning = reasoning(source.get("reasoning"));
         if (!reasoning.isEmpty()) safe.put("reasoning", reasoning);
         for (String key : List.of("processStartedAt", "processCompletedAt")) {
-            if (positiveSequence(source.get(key))) safe.put(key, ((Number) source.get(key)).longValue());
+            long value = positiveInteger(source.get(key));
+            if (value > 0) safe.put(key, value);
         }
         safe.put("toolResults", toolResults(source.get("toolResults"), state));
         safe.put("review", review(source.get("review"), state));
@@ -126,14 +127,12 @@ final class ChatDebugMetadataSanitizer {
     Map<String, Object> progressEvent(Map<String, ?> source, String turnId) {
         if (source == null || !(source.get("step") instanceof String step) || !PROGRESS_STEPS.contains(step)
                 || !(source.get("status") instanceof String status) || !PROGRESS_STATUSES.contains(status)
-                || !(source.get("sequence") instanceof Number sequence)
-                || !Double.isFinite(sequence.doubleValue()) || sequence.longValue() < 1
-                || sequence.doubleValue() != sequence.longValue() || sequence.longValue() > 9_007_199_254_740_991L) {
+                || positiveInteger(source.get("sequence")) == 0) {
             return Map.of();
         }
         Map<String, Object> safe = new LinkedHashMap<>();
         safe.put("turnId", turnId);
-        safe.put("sequence", sequence.longValue());
+        safe.put("sequence", positiveInteger(source.get("sequence")));
         safe.put("step", source.get("step"));
         safe.put("status", source.get("status"));
         putDuration(safe, "durationMs", source.get("durationMs"));
@@ -146,13 +145,13 @@ final class ChatDebugMetadataSanitizer {
     Map<String, Object> reasoningEvent(Map<String, ?> source, String turnId) {
         if (source == null || !turnId.equals(source.get("turnId"))
                 || !"writer_agent".equals(source.get("step"))
-                || !reasoningKind(source.get("kind")) || !positiveSequence(source.get("sequence"))
+                || !reasoningKind(source.get("kind")) || positiveInteger(source.get("sequence")) == 0
                 || !(source.get("delta") instanceof String delta) || delta.isEmpty()) return Map.of();
         String safeText = reasoningText(delta);
         if (safeText.isEmpty()) return Map.of();
         Map<String, Object> safe = new LinkedHashMap<>();
         safe.put("turnId", turnId);
-        safe.put("sequence", ((Number) source.get("sequence")).longValue());
+        safe.put("sequence", positiveInteger(source.get("sequence")));
         safe.put("step", "writer_agent");
         safe.put("kind", source.get("kind"));
         safe.put("delta", safeText);
@@ -161,22 +160,30 @@ final class ChatDebugMetadataSanitizer {
 
     private Map<String, Object> reasoning(Object value) {
         Map<?, ?> source = map(value);
-        if (!reasoningKind(source.get("kind")) || !positiveSequence(source.get("sequence"))
+        if (!reasoningKind(source.get("kind")) || positiveInteger(source.get("sequence")) == 0
                 || !(source.get("text") instanceof String text)) return Map.of();
         String safeText = reasoningText(text);
         if (safeText.isEmpty()) return Map.of();
         return Map.of("text", safeText, "kind", source.get("kind"),
-                "sequence", ((Number) source.get("sequence")).longValue());
+                "sequence", positiveInteger(source.get("sequence")));
     }
 
     private boolean reasoningKind(Object value) {
         return "reasoning".equals(value) || "summary".equals(value);
     }
 
-    private boolean positiveSequence(Object value) {
-        return value instanceof Number number && Double.isFinite(number.doubleValue())
+    private long positiveInteger(Object value) {
+        // The application's Jackson configuration writes Long values as JSON
+        // strings to protect database IDs. Rehydrate these bounded display
+        // counters without changing that global ID contract.
+        if (value instanceof String text && text.matches("[1-9][0-9]{0,15}")) {
+            long parsed = Long.parseLong(text);
+            return parsed <= 9_007_199_254_740_991L ? parsed : 0;
+        }
+        if (value instanceof Number number && Double.isFinite(number.doubleValue())
                 && number.longValue() > 0 && number.doubleValue() == number.longValue()
-                && number.longValue() <= 9_007_199_254_740_991L;
+                && number.longValue() <= 9_007_199_254_740_991L) return number.longValue();
+        return 0;
     }
 
     private String reasoningText(String value) {

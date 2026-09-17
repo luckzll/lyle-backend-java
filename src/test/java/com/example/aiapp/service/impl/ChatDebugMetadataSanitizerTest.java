@@ -28,6 +28,25 @@ class ChatDebugMetadataSanitizerTest {
     private final ChatDebugMetadataSanitizer sanitizer = new ChatDebugMetadataSanitizer(objectMapper);
 
     @Test
+    void rehydratesCanonicalLongStringsButRejectsMalformedOrUnsafeDisplayCounters() {
+        var saved = sanitizer.sanitize(Map.of(
+                "processStartedAt", "1789662595003", "processCompletedAt", "1789662596003",
+                "reasoning", Map.of("text", "检查完成", "kind", "reasoning", "sequence", "12"),
+                "agentProgress", List.of(Map.of("turnId", "turn-1", "step", "writer_agent",
+                        "status", "completed", "sequence", "13"))));
+        assertThat(saved).containsEntry("processStartedAt", 1789662595003L).containsEntry("processCompletedAt", 1789662596003L);
+        assertThat(saved.get("reasoning")).isEqualTo(Map.of("text", "检查完成", "kind", "reasoning", "sequence", 12L));
+        assertThat(saved.get("agentProgress").toString()).contains("sequence=13");
+        for (Object sequence : List.of("0", "-1", "01", " 1", "1 ", "+1", "1.5", "1e3", "NaN",
+                "9007199254740992", "99999999999999999999999", true, 1.5, -1)) {
+            assertThat(sanitizer.progressEvent(Map.of("step", "writer_agent", "status", "running",
+                    "sequence", sequence), "turn-1")).as("sequence %s", sequence).isEmpty();
+            assertThat(sanitizer.sanitize(Map.of("reasoning", Map.of("text", "无效", "kind", "reasoning", "sequence", sequence))))
+                    .doesNotContainKey("reasoning");
+        }
+    }
+
+    @Test
     void displayReasoningUsesBoundedAllowlistAndPreservesWhitespaceWithoutPrivateFields() {
         var safe = sanitizer.sanitize(Map.of("reasoning", Map.of(
                 "text", "先检查 \n 再比较\u0000", "kind", "summary", "sequence", 2,

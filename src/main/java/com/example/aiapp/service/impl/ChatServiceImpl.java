@@ -957,14 +957,15 @@ public class ChatServiceImpl implements ChatService {
 
     private List<Map<String, Object>> interruptRunningSteps(Map<String, Object> metadata, String reason) {
         if (!(metadata.get("agentProgress") instanceof List<?> previous)) return List.of();
-        long sequence = previous.stream().filter(Map.class::isInstance).map(Map.class::cast)
-                .map(item -> item.get("sequence")).filter(Number.class::isInstance).map(Number.class::cast)
-                .mapToLong(Number::longValue).max().orElse(0);
+        List<Map<String, Object>> normalized = previous.stream()
+                .filter(Map.class::isInstance).map(this::mapValue)
+                .map(step -> chatDebugMetadataSanitizer.progressEvent(step, stringValue(step.get("turnId"))))
+                .filter(step -> !step.isEmpty()).toList();
+        long sequence = normalized.stream().mapToLong(step -> ((Number) step.get("sequence")).longValue())
+                .max().orElse(0);
         List<Map<String, Object>> progress = new ArrayList<>();
         List<Map<String, Object>> interrupted = new ArrayList<>();
-        for (Object item : previous) {
-            if (!(item instanceof Map<?, ?> source)) continue;
-            Map<String, Object> step = mapValue(source);
+        for (Map<String, Object> step : normalized) {
             if ("running".equals(step.get("status"))) {
                 step.put("status", "failed");
                 step.put("summary", reason);
