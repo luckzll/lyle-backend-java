@@ -319,6 +319,7 @@ public class ChatServiceImpl implements ChatService {
         initialMetadata.put("turnId", turnId);
         initialMetadata.put("phase", "THINKING");
         initialMetadata.put("statusText", "正在理解你的需求…");
+        initialMetadata.put("processStartedAt", System.currentTimeMillis());
         initialMetadata.putAll(chatDebugMetadataSanitizer.sanitize(Map.of(
                 "knowledgeBaseIds", request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds()
         )));
@@ -349,7 +350,8 @@ public class ChatServiceImpl implements ChatService {
         chunkConsumer.accept(sse("turn.status", Map.of(
                 "turnId", turnId,
                 "phase", "THINKING",
-                "message", "正在理解你的需求…"
+                "message", "正在理解你的需求…",
+                "processStartedAt", initialMetadata.get("processStartedAt")
         )));
         AtomicBoolean responding = new AtomicBoolean();
         AtomicBoolean textDirty = new AtomicBoolean();
@@ -371,6 +373,7 @@ public class ChatServiceImpl implements ChatService {
                                     synchronized (activeTurn) {
                                         activeTurn.message().setContent(assistantAnswer.toString());
                                         applyStreamEvent(activeTurn, event);
+                                        if ("reasoning.delta".equals(event.name())) textDirty.set(true);
                                     }
                                 },
                                 chunkConsumer
@@ -417,13 +420,16 @@ public class ChatServiceImpl implements ChatService {
                     activeTurn.metadata().put("statusText", "回复完成");
                 }
                 activeTurn.message().setContent(assistantAnswer.toString());
+                activeTurn.metadata().putIfAbsent("processCompletedAt", System.currentTimeMillis());
                 persistActiveTurn(activeTurn);
             }
             if (!"FAILED".equals(finalUpstreamPhase)) {
                 chunkConsumer.accept(sse("turn.status", Map.of(
                         "turnId", turnId,
                         "phase", "COMPLETED",
-                        "message", "回复完成"
+                        "message", "回复完成",
+                        "processStartedAt", initialMetadata.get("processStartedAt"),
+                        "processCompletedAt", initialMetadata.get("processCompletedAt")
                 )));
             }
             // Completion is observable only after the final durable snapshot is saved.
@@ -437,6 +443,7 @@ public class ChatServiceImpl implements ChatService {
             synchronized (activeTurn) {
                 activeTurn.metadata().put("phase", "FAILED");
                 activeTurn.metadata().put("statusText", failureMessage);
+                activeTurn.metadata().putIfAbsent("processCompletedAt", System.currentTimeMillis());
                 failUnfinishedImageItems(activeTurn.metadata(), "图片任务已中断");
                 interruptedSteps = interruptRunningSteps(activeTurn.metadata(), "已中断：" + failureMessage);
                 activeTurn.message().setContent(
@@ -448,7 +455,9 @@ public class ChatServiceImpl implements ChatService {
             chunkConsumer.accept(sse("turn.status", Map.of(
                     "turnId", turnId,
                     "phase", "FAILED",
-                    "message", failureMessage
+                    "message", failureMessage,
+                    "processStartedAt", initialMetadata.get("processStartedAt"),
+                    "processCompletedAt", initialMetadata.get("processCompletedAt")
             )));
             chunkConsumer.accept(sse("error", Map.of("turnId", turnId, "message", failureMessage)));
             throw exception;
@@ -552,8 +561,15 @@ public class ChatServiceImpl implements ChatService {
             data = chatDebugMetadataSanitizer.progressEvent(data, activeTurn.turnId());
             if (data.isEmpty() || !isNewProgress(activeTurn, data)) return false;
         }
+        if ("reasoning.delta".equals(currentEvent)) {
+            data = acceptedReasoningEvent(activeTurn, data);
+            if (data.isEmpty()) return false;
+        }
         if ("meta".equals(currentEvent)) {
             data.remove("agentProgress");
+            data.remove("reasoning");
+            data.remove("processStartedAt");
+            data.remove("processCompletedAt");
         }
         if ("turn.status".equals(currentEvent) && "COMPLETED".equals(data.get("phase"))) {
             // A terminal status without the protocol's done marker is an interrupted response.
@@ -569,9 +585,36 @@ public class ChatServiceImpl implements ChatService {
         } else if ("error".equals(currentEvent)) {
             upstreamPhase.set("FAILED");
         }
+        if ("turn.status".equals(currentEvent)) {
+            data.remove("processStartedAt");
+            data.remove("processCompletedAt");
+            synchronized (activeTurn) {
+                for (String key : List.of("processStartedAt", "processCompletedAt")) {
+                    if (activeTurn.metadata().containsKey(key)) data.put(key, activeTurn.metadata().get(key));
+                }
+            }
+        }
         // Forward complete frames: lifecycle events and heartbeats can never split upstream JSON.
         downstream.accept(sse(currentEvent, data));
         return receivedDelta;
+    }
+
+    private Map<String, Object> acceptedReasoningEvent(ActiveTurn activeTurn, Map<String, Object> raw) {
+        Map<String, Object> data = chatDebugMetadataSanitizer.reasoningEvent(raw, activeTurn.turnId());
+        if (data.isEmpty()) return data;
+        synchronized (activeTurn) {
+            Map<String, Object> previous = mapValue(activeTurn.metadata().get("reasoning"));
+            if (!previous.isEmpty() && (!data.get("kind").equals(previous.get("kind"))
+                    || ((Number) previous.get("sequence")).longValue()
+                    >= ((Number) data.get("sequence")).longValue())) return Map.of();
+            int remaining = ChatDebugMetadataSanitizer.MAX_REASONING_CHARS
+                    - stringValue(previous.get("text")).length();
+            if (remaining <= 0) return Map.of();
+            String delta = ChatDebugMetadataSanitizer.truncateReasoning((String) data.get("delta"), remaining);
+            if (delta.isEmpty()) return Map.of();
+            data.put("delta", delta);
+            return data;
+        }
     }
 
     private boolean isNewProgress(ActiveTurn activeTurn, Map<String, Object> data) {
@@ -606,6 +649,14 @@ public class ChatServiceImpl implements ChatService {
             Map<String, Object> metadata = activeTurn.metadata();
             Map<String, Object> data = event.data();
             switch (event.name()) {
+                case "reasoning.delta" -> {
+                    Map<String, Object> previous = mapValue(metadata.get("reasoning"));
+                    metadata.put("reasoning", Map.of(
+                            "text", stringValue(previous.get("text")) + data.get("delta"),
+                            "kind", data.get("kind"), "sequence", data.get("sequence")
+                    ));
+                    // Checkpoint reasoning with answer text, never a write per model token.
+                }
                 case "agent.step" -> {
                     List<Map<String, Object>> progress = new ArrayList<>();
                     if (metadata.get("agentProgress") instanceof List<?> previous) {
@@ -629,6 +680,7 @@ public class ChatServiceImpl implements ChatService {
                         metadata.put("statusText", String.valueOf(data.get("message")));
                     }
                     if ("FAILED".equals(phase)) {
+                        metadata.putIfAbsent("processCompletedAt", System.currentTimeMillis());
                         failUnfinishedImageItems(metadata, "图片任务已中断");
                         interruptRunningSteps(metadata, "已中断，未收到该步骤的完成结果。");
                     }
@@ -651,6 +703,9 @@ public class ChatServiceImpl implements ChatService {
                     rawDebug.putAll(data);
                     // Final diagnostics cannot overwrite the accepted, ordered live progress.
                     rawDebug.remove("agentProgress");
+                    rawDebug.remove("reasoning");
+                    rawDebug.remove("processStartedAt");
+                    rawDebug.remove("processCompletedAt");
                     // Only ids already validated against the current user may reach durable metadata.
                     rawDebug.put("knowledgeBaseIds", metadata.getOrDefault("knowledgeBaseIds", List.of()));
                     rawDebug.put(
@@ -664,6 +719,7 @@ public class ChatServiceImpl implements ChatService {
                 case "error" -> {
                     metadata.put("phase", "FAILED");
                     metadata.put("statusText", "回复失败");
+                    metadata.putIfAbsent("processCompletedAt", System.currentTimeMillis());
                     failUnfinishedImageItems(metadata, stringValue(data.get("message")));
                     interruptRunningSteps(metadata, "已中断，未收到该步骤的完成结果。");
                     changed = true;
@@ -872,6 +928,7 @@ public class ChatServiceImpl implements ChatService {
 
     @SuppressWarnings("unchecked")
     private void markTurnCancelled(Map<String, Object> metadata, ChatMessageEntity message) {
+        metadata.putIfAbsent("processCompletedAt", System.currentTimeMillis());
         metadata.put("phase", "FAILED");
         metadata.put("statusText", "已停止生成");
         interruptRunningSteps(metadata, "已中断：用户停止了本轮生成。");
