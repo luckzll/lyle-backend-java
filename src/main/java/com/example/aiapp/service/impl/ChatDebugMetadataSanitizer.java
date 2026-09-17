@@ -20,11 +20,13 @@ import java.util.regex.Pattern;
  * <p>The Python response and SSE metadata are extensible objects. Debug data is
  * therefore rebuilt from a small display-only schema before it is written to
  * {@code chat_message.metadata_json}. In particular, prompt/context bodies,
- * raw tool parameters/results and model reasoning are never copied.</p>
+ * raw tool parameters/results and internal model traces are never copied.
+ * Provider-exposed reasoning has a separate, bounded display schema.</p>
  */
 final class ChatDebugMetadataSanitizer {
 
     static final String DEBUG_VERSION = "chat-debug-v1";
+    static final int MAX_REASONING_CHARS = 16_000;
 
     private static final int MAX_DEBUG_BYTES = 128 * 1024;
     private static final int MAX_TRACE_ITEMS = 40;
@@ -96,6 +98,11 @@ final class ChatDebugMetadataSanitizer {
         if (source.containsKey("agentProgress")) {
             safe.put("agentProgress", agentProgress(source.get("agentProgress")));
         }
+        Map<String, Object> reasoning = reasoning(source.get("reasoning"));
+        if (!reasoning.isEmpty()) safe.put("reasoning", reasoning);
+        for (String key : List.of("processStartedAt", "processCompletedAt")) {
+            if (positiveSequence(source.get(key))) safe.put(key, ((Number) source.get(key)).longValue());
+        }
         safe.put("toolResults", toolResults(source.get("toolResults"), state));
         safe.put("review", review(source.get("review"), state));
         safe.put("usage", usage(source.get("usage")));
@@ -134,6 +141,55 @@ final class ChatDebugMetadataSanitizer {
         Map<String, Object> timings = timings(source.get("timings"));
         if (!timings.isEmpty()) safe.put("timings", timings);
         return safe;
+    }
+
+    Map<String, Object> reasoningEvent(Map<String, ?> source, String turnId) {
+        if (source == null || !turnId.equals(source.get("turnId"))
+                || !"writer_agent".equals(source.get("step"))
+                || !reasoningKind(source.get("kind")) || !positiveSequence(source.get("sequence"))
+                || !(source.get("delta") instanceof String delta) || delta.isEmpty()) return Map.of();
+        String safeText = reasoningText(delta);
+        if (safeText.isEmpty()) return Map.of();
+        Map<String, Object> safe = new LinkedHashMap<>();
+        safe.put("turnId", turnId);
+        safe.put("sequence", ((Number) source.get("sequence")).longValue());
+        safe.put("step", "writer_agent");
+        safe.put("kind", source.get("kind"));
+        safe.put("delta", safeText);
+        return safe;
+    }
+
+    private Map<String, Object> reasoning(Object value) {
+        Map<?, ?> source = map(value);
+        if (!reasoningKind(source.get("kind")) || !positiveSequence(source.get("sequence"))
+                || !(source.get("text") instanceof String text)) return Map.of();
+        String safeText = reasoningText(text);
+        if (safeText.isEmpty()) return Map.of();
+        return Map.of("text", safeText, "kind", source.get("kind"),
+                "sequence", ((Number) source.get("sequence")).longValue());
+    }
+
+    private boolean reasoningKind(Object value) {
+        return "reasoning".equals(value) || "summary".equals(value);
+    }
+
+    private boolean positiveSequence(Object value) {
+        return value instanceof Number number && Double.isFinite(number.doubleValue())
+                && number.longValue() > 0 && number.doubleValue() == number.longValue()
+                && number.longValue() <= 9_007_199_254_740_991L;
+    }
+
+    private String reasoningText(String value) {
+        // Preserve token boundaries and newlines; ordinary diagnostic text() trims them.
+        String safe = maskSecrets(value.replaceAll("[\\p{Cc}&&[^\\n\\r\\t]]", ""), new LimitState());
+        return truncateReasoning(safe, MAX_REASONING_CHARS);
+    }
+
+    static String truncateReasoning(String value, int maxChars) {
+        if (value.length() <= maxChars) return value;
+        int end = Math.max(0, maxChars);
+        if (end > 0 && Character.isHighSurrogate(value.charAt(end - 1))) end--;
+        return value.substring(0, end);
     }
 
     private List<Map<String, Object>> agentProgress(Object value) {

@@ -28,6 +28,24 @@ class ChatDebugMetadataSanitizerTest {
     private final ChatDebugMetadataSanitizer sanitizer = new ChatDebugMetadataSanitizer(objectMapper);
 
     @Test
+    void displayReasoningUsesBoundedAllowlistAndPreservesWhitespaceWithoutPrivateFields() {
+        var safe = sanitizer.sanitize(Map.of("reasoning", Map.of(
+                "text", "先检查 \n 再比较\u0000", "kind", "summary", "sequence", 2,
+                "rawPrompt", "PRIVATE"), "processStartedAt", 1000L, "processCompletedAt", -2));
+        assertThat(safe.get("reasoning")).isEqualTo(Map.of("text", "先检查 \n 再比较", "kind", "summary", "sequence", 2L));
+        assertThat(safe).containsEntry("processStartedAt", 1000L).doesNotContainKey("processCompletedAt");
+        assertThat(safe.toString()).doesNotContain("PRIVATE", "rawPrompt");
+        var masked = sanitizer.reasoningEvent(Map.of("turnId", "turn-1", "step", "writer_agent",
+                "kind", "reasoning", "sequence", 1, "delta", "Authorization: Bearer secret-token-value"), "turn-1");
+        assertThat(masked.get("delta")).isEqualTo("[已隐藏]");
+        var invalid = sanitizer.sanitize(Map.of("reasoning", Map.of("text", "PRIVATE", "kind", "internal", "sequence", 1)));
+        assertThat(invalid).doesNotContainKey("reasoning");
+        var capped = sanitizer.reasoningEvent(Map.of("turnId", "turn-1", "step", "writer_agent",
+                "kind", "summary", "sequence", 1, "delta", "文".repeat(15_999) + "😀"), "turn-1");
+        assertThat((String) capped.get("delta")).hasSize(15_999).doesNotEndWith("\uD83D");
+    }
+
+    @Test
     void retainsAllFourQueryTimingsAndLaterTotalsButRejectsUnknownKeys() {
         Map<String, Object> timings = new LinkedHashMap<>();
         for (int query = 1; query <= 4; query++) {
