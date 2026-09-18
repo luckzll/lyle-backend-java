@@ -921,6 +921,8 @@ public class ChatServiceImpl implements ChatService {
         ChatMessageEntity message;
         if (activeTurn != null && conversationId.equals(activeTurn.conversationId())) {
             synchronized (activeTurn) {
+                // Completion can be persisted before the worker leaves activeTurns.
+                if (isTerminalTurn(activeTurn.metadata())) return toVO(activeTurn.message());
                 activeTurn.cancelled().set(true);
                 markTurnCancelled(activeTurn.metadata(), activeTurn.message());
                 persistActiveTurn(activeTurn);
@@ -933,12 +935,17 @@ public class ChatServiceImpl implements ChatService {
                 throw new ResponseStatusException(NOT_FOUND, "对话轮次不存在");
             }
             Map<String, Object> metadata = readMetadata(message.getMetadataJson());
+            if (isTerminalTurn(metadata)) return toVO(message);
             markTurnCancelled(metadata, message);
             message.setMetadataJson(writeMetadata(metadata));
             chatMessageMapper.updateById(message);
             touchConversation(conversationId);
         }
         return toVO(message);
+    }
+
+    private boolean isTerminalTurn(Map<String, Object> metadata) {
+        return "COMPLETED".equals(metadata.get("phase")) || "FAILED".equals(metadata.get("phase"));
     }
 
     private void ensureConversationOwnedByUserIfPersisted(Long userId, String conversationId) {
