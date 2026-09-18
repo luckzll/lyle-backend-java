@@ -28,6 +28,33 @@ class ChatDebugMetadataSanitizerTest {
     private final ChatDebugMetadataSanitizer sanitizer = new ChatDebugMetadataSanitizer(objectMapper);
 
     @Test
+    void toolCallsAndTimelineAreAllowlistedBoundedAndRetainOnlyValidReferences() {
+        Map<String, Object> rawCall = new LinkedHashMap<>(Map.of("turnId", "turn-1", "callId", "lookup-1", "tool", "mcp:calendar.list",
+                "title", "日程查询".repeat(50), "summary", "查询完成".repeat(100), "status", "completed", "sequence", "9", "durationMs", -1));
+        rawCall.put("arguments", Map.of("password", "PRIVATE"));
+        rawCall.put("result", "PRIVATE");
+        rawCall.put("exception", "PRIVATE");
+        var safe = sanitizer.sanitize(Map.of("turnId", "turn-1", "toolCalls", List.of(rawCall),
+                "processTimeline", List.of(Map.of("type", "tool", "id", "missing"),
+                        Map.of("type", "agent", "id", "missing"), Map.of("type", "tool", "id", "lookup-1", "raw", "PRIVATE"),
+                        Map.of("type", "reasoning", "id", "r-1", "text", "第一段", "kind", "summary", "sequence", "2", "raw", "PRIVATE"))));
+        assertThat(safe.toString()).doesNotContain("PRIVATE", "missing", "arguments", "exception", "durationMs");
+        @SuppressWarnings("unchecked") var call = ((List<Map<String, Object>>) safe.get("toolCalls")).get(0);
+        assertThat((String) call.get("title")).hasSize(80);
+        assertThat((String) call.get("summary")).hasSize(240);
+        assertThat(call).containsEntry("sequence", 9L);
+        @SuppressWarnings("unchecked") var timeline = (List<Map<String, Object>>) safe.get("processTimeline");
+        assertThat(timeline).extracting(item -> item.get("id")).containsExactly("lookup-1", "r-1");
+        List<Map<String, Object>> oversized = new ArrayList<>();
+        for (int index = 1; index <= 600; index++) oversized.add(Map.of("type", "reasoning", "id", "r-" + index,
+                "sequence", index, "kind", "summary", "text", "文".repeat(100)));
+        var bounded = sanitizer.processTimeline(oversized, Map.of());
+        assertThat(bounded.get(0)).containsEntry("id", "r-89");
+        assertThat(bounded).hasSizeLessThanOrEqualTo(512);
+        assertThat(bounded.stream().mapToInt(item -> ((String) item.get("text")).length()).sum()).isEqualTo(16_000);
+    }
+
+    @Test
     void rehydratesCanonicalLongStringsButRejectsMalformedOrUnsafeDisplayCounters() {
         var saved = sanitizer.sanitize(Map.of(
                 "processStartedAt", "1789662595003", "processCompletedAt", "1789662596003",
