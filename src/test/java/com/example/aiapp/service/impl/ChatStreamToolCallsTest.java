@@ -190,6 +190,79 @@ class ChatStreamToolCallsTest {
         assertThat(fixture.history(fixture.latest())).doesNotContainKeys("toolCalls", "processTimeline");
     }
 
+    @Test
+    void lateCancellationPreservesCompletedAnswerAndProcessMetadata() {
+        Fixture fixture = new Fixture();
+        when(fixture.client.streamChat(any())).thenReturn(Flux.just(
+                reasoning(1, "已核对天气。"), event("tool.call", call("one", 1, "completed")),
+                event("delta", Map.of("text", "天气晴朗。")), event("done", Map.of())));
+        fixture.run(frame -> {});
+        ChatMessageEntity saved = fixture.latest();
+        String metadata = saved.getMetadataJson();
+        Map<String, Object> expectedHistory = fixture.history(saved);
+        when(fixture.messages.selectByConversationIdAndTurnId("temporary-conversation", "turn-tools")).thenReturn(saved);
+        clearInvocations(fixture.messages);
+
+        var response = fixture.service.cancelTurn(42L, "temporary-conversation", "turn-tools");
+
+        assertThat(response.content()).isEqualTo("天气晴朗。");
+        assertThat(response.metadata()).isEqualTo(expectedHistory).containsEntry("phase", "COMPLETED");
+        assertThat(saved.getMetadataJson()).isEqualTo(metadata);
+        verify(fixture.messages, never()).updateById(any(ChatMessageEntity.class));
+    }
+
+    @Test
+    void repeatedCancellationPreservesTheFirstFailedSnapshot() throws Exception {
+        Fixture fixture = new Fixture();
+        ChatMessageEntity saved = new ChatMessageEntity();
+        saved.setRole("assistant");
+        saved.setConversationId("temporary-conversation");
+        saved.setTurnId("turn-tools");
+        saved.setContent("已生成的部分回答。");
+        saved.setMetadataJson(JSON.writeValueAsString(Map.of("turnId", "turn-tools", "phase", "RESPONDING",
+                "toolCalls", List.of(withStringSequence(call("one", 7, "running"))),
+                "processTimeline", List.of(Map.of("type", "tool", "id", "one")))));
+        when(fixture.messages.selectByConversationIdAndTurnId("temporary-conversation", "turn-tools")).thenReturn(saved);
+        var first = fixture.service.cancelTurn(42L, "temporary-conversation", "turn-tools");
+        String metadata = saved.getMetadataJson();
+        clearInvocations(fixture.messages);
+
+        var repeated = fixture.service.cancelTurn(42L, "temporary-conversation", "turn-tools");
+
+        assertThat(repeated.content()).isEqualTo(first.content());
+        assertThat(repeated.metadata()).isEqualTo(first.metadata()).containsEntry("phase", "FAILED");
+        assertThat(saved.getMetadataJson()).isEqualTo(metadata);
+        verify(fixture.messages, never()).updateById(any(ChatMessageEntity.class));
+    }
+
+    @Test
+    void terminalCancellationWhileWorkerIsStillActivePreservesSnapshotAndDoesNotInterruptIt() {
+        for (String phase : List.of("COMPLETED", "FAILED")) {
+            Fixture fixture = new Fixture();
+            when(fixture.client.streamChat(any())).thenReturn(Flux.just(
+                    reasoning(1, "已核对天气。"), event("tool.call", call("one", 1, "completed")),
+                    event("delta", Map.of("text", "已返回的回答。")),
+                    event("turn.status", Map.of("phase", phase, "message", "原始结束说明")), event("done", Map.of())));
+            List<String> checkedPhases = new ArrayList<>();
+            try {
+                fixture.run(frame -> {
+                    if (!frame.startsWith("event: turn.status") || !frame.contains("\"phase\":\"" + phase + "\"")) return;
+                    ChatMessageEntity before = fixture.latest();
+                    int writes = fixture.snapshots.size();
+                    var response = fixture.service.cancelTurn(42L, "temporary-conversation", "turn-tools");
+                    assertThat(response.content()).isEqualTo(before.getContent());
+                    assertThat(response.metadata()).isEqualTo(fixture.history(before)).containsEntry("phase", phase);
+                    assertThat(fixture.snapshots).hasSize(writes);
+                    assertThat(Thread.currentThread().isInterrupted()).isFalse();
+                    checkedPhases.add(phase);
+                });
+                assertThat(checkedPhases).containsExactly(phase);
+            } finally {
+                Thread.interrupted();
+            }
+        }
+    }
+
     private static Map<String, Object> withStringSequence(Map<String, Object> value) {
         Map<String, Object> result = new LinkedHashMap<>(value);
         result.put("sequence", String.valueOf(value.get("sequence")));
