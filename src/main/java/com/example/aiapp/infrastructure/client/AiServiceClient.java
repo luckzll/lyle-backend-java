@@ -61,6 +61,26 @@ public class AiServiceClient {
         });
     }
 
+    public Flux<String> streamLocalWorkspace(Map<String, Object> request) {
+        return Flux.defer(() -> {
+            StreamingUtf8Decoder decoder = new StreamingUtf8Decoder();
+            return aiServiceWebClient.post().uri("/ai/local-workspace/step/stream")
+                    .accept(MediaType.TEXT_EVENT_STREAM).bodyValue(request).retrieve()
+                    .onStatus(HttpStatusCode::isError, response -> response.releaseBody().then(
+                            reactor.core.publisher.Mono.just(new IllegalStateException("Workspace model unavailable"))))
+                    .bodyToFlux(org.springframework.core.io.buffer.DataBuffer.class)
+                    .map(buffer -> {
+                        try {
+                            byte[] bytes = new byte[buffer.readableByteCount()]; buffer.read(bytes);
+                            return decoder.decode(bytes, false);
+                        } finally { DataBufferUtils.release(buffer); }
+                    })
+                    .concatWith(Flux.defer(() -> Flux.just(decoder.decode(new byte[0], true))))
+                    .filter(chunk -> !chunk.isEmpty())
+                    .doOnDiscard(org.springframework.core.io.buffer.DataBuffer.class, DataBufferUtils::release);
+        });
+    }
+
     /** Network buffers may split a UTF-8 code point, so decoding must span buffers. */
     private static final class StreamingUtf8Decoder {
         private final java.nio.charset.CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder();
