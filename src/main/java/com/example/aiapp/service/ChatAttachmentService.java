@@ -29,6 +29,8 @@ public interface ChatAttachmentService {
 
     List<AiChatAttachmentDTO> requireReady(Long userId, List<String> rawIds);
 
+    List<AiChatAttachmentDTO> requireRecentForConversation(Long userId, String conversationId);
+
     List<AiChatAttachmentDTO> requireAttachedForRetry(
             Long userId,
             String conversationId,

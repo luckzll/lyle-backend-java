@@ -64,6 +64,30 @@
         LIMIT #{limit}
     </select>
 
+    <select id="selectRecentAttachedForConversation" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM chat_attachment
+        WHERE user_id = #{userId}
+          AND conversation_id = #{conversationId}
+          AND status = 'ATTACHED'
+          AND message_id = (
+            SELECT MAX(m.id)
+            FROM chat_message m
+            INNER JOIN conversation c ON c.id = m.conversation_id AND c.user_id = #{userId}
+            WHERE m.conversation_id = #{conversationId}
+              AND m.role = 'user'
+              <if test="atOrBeforeMessageId != null">
+                AND m.id &lt;= #{atOrBeforeMessageId}
+              </if>
+              AND EXISTS (
+                SELECT 1 FROM chat_attachment a
+                WHERE a.message_id = m.id AND a.user_id = #{userId}
+                  AND a.conversation_id = #{conversationId} AND a.status = 'ATTACHED'
+              )
+          )
+        ORDER BY position ASC
+    </select>
+
     <select id="selectByUserIdAndIds" resultMap="BaseResultMap">
         SELECT <include refid="Base_Column_List"/>
         FROM chat_attachment
