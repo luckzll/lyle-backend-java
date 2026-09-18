@@ -19,6 +19,10 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.text.Normalizer;
 import java.util.ArrayList;
@@ -36,18 +40,23 @@ import com.example.aiapp.mapper.ChatAttachmentMapper;
 @Service
 public class ChatAttachmentServiceImpl implements ChatAttachmentService {
 
-    public static final int MAX_COUNT = 8;
+    public static final int MAX_COUNT = 200;
+    public static final int MAX_REGULAR_COUNT = 8;
+    public static final int MAX_IMAGE_COUNT = 8;
     public static final long MAX_FILE_BYTES = 5L * 1024 * 1024;
     public static final long MAX_TOTAL_BYTES = 20L * 1024 * 1024;
     private static final String BUCKET = "chat-attachments";
     private static final Set<String> IMAGE_TYPES = Set.of("image/jpeg", "image/png", "image/webp", "image/gif");
-    private static final Set<String> FILE_TYPES = Set.of(
-            "application/pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "text/plain", "text/markdown", "text/csv", "application/json", "application/x-ndjson"
+    private static final Set<String> TEXT_EXTENSIONS = Set.of(
+            "txt", "md", "csv", "json", "log", "ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "svelte",
+            "py", "java", "kt", "kts", "go", "rs", "c", "h", "cpp", "hpp", "cs", "php", "rb", "swift",
+            "sh", "bash", "zsh", "ps1", "sql", "yaml", "yml", "toml", "ini", "cfg", "xml", "html", "htm",
+            "css", "scss", "sass", "less", "graphql", "gql", "proto", "properties", "gradle", "scala", "r", "dart", "ipynb"
     );
-    private static final Set<String> FILE_EXTENSIONS = Set.of("pdf", "docx", "txt", "md", "csv", "json", "log", "xlsx");
+    private static final Set<String> TEXT_NAMES = Set.of(
+            "Dockerfile", "Makefile", "Containerfile", "Jenkinsfile", "Procfile", "README", "LICENSE",
+            ".gitignore", ".dockerignore", ".editorconfig"
+    );
 
     private final ChatAttachmentMapper mapper;
     private final FileStorageService storage;
@@ -74,10 +83,11 @@ public class ChatAttachmentServiceImpl implements ChatAttachmentService {
             String folderRoot,
             String relativePath
     ) {
-        byte[] bytes = validateAndRead(file);
+        if (file == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请选择附件");
         String name = safeFileName(file.getOriginalFilename());
+        byte[] bytes = validateAndRead(file, isTextFile(name));
         var folder = ChatAttachmentPathPolicy.normalize(sourceType, folderGroupId, folderRoot, relativePath, name);
-        String contentType = normalizedContentType(file.getContentType(), name);
+        String contentType = contentTypeFor(name);
         String kind = IMAGE_TYPES.contains(contentType) ? "image" : "file";
         if (StringUtils.hasText(requestedKind) && !kind.equals(requestedKind)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "附件类型与文件内容不匹配");
@@ -132,6 +142,17 @@ public class ChatAttachmentServiceImpl implements ChatAttachmentService {
     }
 
     @Override
+    public List<AiChatAttachmentDTO> requireRecentForConversation(Long userId, String conversationId) {
+        Long id;
+        try {
+            id = Long.valueOf(conversationId);
+        } catch (NumberFormatException exception) {
+            return List.of();
+        }
+        return id <= 0 ? List.of() : recentAttachments(userId, id, null).stream().map(this::toAiDTO).toList();
+    }
+
+    @Override
     public List<AiChatAttachmentDTO> requireAttachedForRetry(
             Long userId,
             String conversationId,
@@ -159,10 +180,11 @@ public class ChatAttachmentServiceImpl implements ChatAttachmentService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "重试必须保留原消息的全部附件和顺序");
             }
         }
-        long total = found.stream().mapToLong(ChatAttachmentEntity::getFileSize).sum();
-        if (total > MAX_TOTAL_BYTES) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "单轮附件总量不能超过 20MB");
-        }
+        // A follow-up may have inherited context without attaching the files again.
+        // Keep that original message's temporal boundary when retrying it later.
+        validateAttachedOwnership(found, userId, persistedConversationId, messageId, true);
+        if (found.isEmpty() && ids.isEmpty()) found = recentAttachments(userId, persistedConversationId, messageId);
+        validateLimits(found);
         return found.stream().map(this::toAiDTO).toList();
     }
 
@@ -232,25 +254,60 @@ public class ChatAttachmentServiceImpl implements ChatAttachmentService {
     private List<ChatAttachmentEntity> readyEntities(Long userId, List<String> rawIds) {
         List<String> ids = rawIds == null ? List.of() : new ArrayList<>(new LinkedHashSet<>(rawIds));
         if (ids.size() > MAX_COUNT || ids.size() != (rawIds == null ? 0 : rawIds.size())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "单轮最多 8 个附件，且不能重复");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "单轮最多 200 个文件，且不能重复");
         }
         if (ids.isEmpty()) return List.of();
         List<ChatAttachmentEntity> found = mapper.selectByUserIdAndIds(userId, ids);
         var byId = found.stream().collect(java.util.stream.Collectors.toMap(ChatAttachmentEntity::getId, item -> item));
         List<ChatAttachmentEntity> ordered = new ArrayList<>();
-        long total = 0;
         for (String id : ids) {
             ChatAttachmentEntity entity = byId.get(id);
-            if (entity == null || !"READY".equals(entity.getStatus())) {
+            if (entity == null || !userId.equals(entity.getUserId()) || !"READY".equals(entity.getStatus())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "附件未就绪或不属于当前用户");
             }
-            total += entity.getFileSize();
             ordered.add(entity);
         }
-        if (total > MAX_TOTAL_BYTES) {
+        validateLimits(ordered);
+        return ordered;
+    }
+
+    private List<ChatAttachmentEntity> recentAttachments(Long userId, Long conversationId, Long atOrBeforeMessageId) {
+        List<ChatAttachmentEntity> found = mapper.selectRecentAttachedForConversation(userId, conversationId, atOrBeforeMessageId);
+        validateAttachedOwnership(found, userId, conversationId, atOrBeforeMessageId, false);
+        validateLimits(found);
+        // New images replace the prior attachment group, but are never replayed
+        // automatically into unrelated follow-ups such as a weather question.
+        return found.stream().filter(entity -> "file".equals(entity.getKind())).toList();
+    }
+
+    private void validateAttachedOwnership(List<ChatAttachmentEntity> entities, Long userId, Long conversationId,
+                                           Long messageId, boolean exactMessage) {
+        if (entities.stream().anyMatch(entity -> !userId.equals(entity.getUserId())
+                || !conversationId.equals(entity.getConversationId()) || !"ATTACHED".equals(entity.getStatus())
+                || entity.getMessageId() == null || (messageId != null && (exactMessage
+                ? !messageId.equals(entity.getMessageId()) : entity.getMessageId() > messageId)))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "附件上下文不属于当前用户、会话或原消息");
+        }
+    }
+
+    private void validateLimits(List<ChatAttachmentEntity> entities) {
+        if (entities.size() > MAX_COUNT) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "单轮最多 200 个文件");
+        }
+        long ordinary = entities.stream().filter(entity -> !(StringUtils.hasText(entity.getFolderGroupId())
+                && StringUtils.hasText(entity.getFolderRoot()) && StringUtils.hasText(entity.getRelativePath()))).count();
+        if (ordinary > MAX_REGULAR_COUNT) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "单轮普通附件最多 8 个，目录内文件最多 200 个");
+        }
+        if (entities.stream().filter(entity -> "image".equals(entity.getKind())).count() > MAX_IMAGE_COUNT) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "单轮图片最多 8 张（含目录内图片）");
+        }
+        if (entities.stream().anyMatch(entity -> entity.getFileSize() < 0 || entity.getFileSize() > MAX_FILE_BYTES)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "单个附件不能超过 5MB");
+        }
+        if (entities.stream().mapToLong(ChatAttachmentEntity::getFileSize).sum() > MAX_TOTAL_BYTES) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "单轮附件总量不能超过 20MB");
         }
-        return ordered;
     }
 
     private ChatAttachmentEntity owned(Long userId, String attachmentId) {
@@ -259,8 +316,8 @@ public class ChatAttachmentServiceImpl implements ChatAttachmentService {
         return entity;
     }
 
-    private byte[] validateAndRead(MultipartFile file) {
-        if (file == null || file.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请选择附件");
+    private byte[] validateAndRead(MultipartFile file, boolean allowEmpty) {
+        if (file.isEmpty() && !allowEmpty) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请选择非空附件");
         if (file.getSize() > MAX_FILE_BYTES) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "单个附件不能超过 5MB");
         try {
             return file.getBytes();
@@ -269,24 +326,41 @@ public class ChatAttachmentServiceImpl implements ChatAttachmentService {
         }
     }
 
-    private String normalizedContentType(String raw, String name) {
-        String value = raw == null ? "" : raw.toLowerCase(Locale.ROOT).split(";", 2)[0];
+    private String contentTypeFor(String name) {
+        if (name.startsWith(".") && !TEXT_NAMES.contains(name)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不支持该附件格式");
+        }
         String ext = extensionValue(name);
-        if (IMAGE_TYPES.contains(value)) return value;
-        if (FILE_TYPES.contains(value) && FILE_EXTENSIONS.contains(ext)) return value;
+        if (isTextFile(name)) return "text/plain";
         return switch (ext) {
             case "pdf" -> "application/pdf";
             case "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
             case "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-            case "md" -> "text/markdown";
-            case "csv" -> "text/csv";
-            case "json" -> "application/json";
-            case "txt", "log" -> "text/plain";
+            case "jpg", "jpeg" -> "image/jpeg";
+            case "png" -> "image/png";
+            case "gif" -> "image/gif";
+            case "webp" -> "image/webp";
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不支持该附件格式");
         };
     }
 
+    private boolean isTextFile(String name) {
+        return TEXT_NAMES.contains(name) || (!name.startsWith(".") && TEXT_EXTENSIONS.contains(extensionValue(name)));
+    }
+
     private void validateSignature(byte[] bytes, String contentType, String name) {
+        if ("text/plain".equals(contentType)) {
+            try {
+                String text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+                if (text.codePoints().anyMatch(value -> (value < 32 && value != '\n' && value != '\r' && value != '\t') || value == 127)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文本附件包含二进制内容，请上传 UTF-8 文本文件");
+                }
+            } catch (CharacterCodingException exception) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文本附件必须使用 UTF-8 编码", exception);
+            }
+            return;
+        }
         boolean valid = switch (contentType) {
             case "image/jpeg" -> starts(bytes, 0xff, 0xd8, 0xff);
             case "image/png" -> starts(bytes, 0x89, 0x50, 0x4e, 0x47);
@@ -356,7 +430,7 @@ public class ChatAttachmentServiceImpl implements ChatAttachmentService {
                 new AiChatAttachmentDTO.StorageObjectRefDTO(
                         entity.getStoragePath(), entity.getStorageProvider(), entity.getBucket(), entity.getObjectKey(),
                         entity.getOriginalName(), entity.getContentType(), entity.getFileSize()
-                )
+                ), entity.getMessageId() == null ? null : String.valueOf(entity.getMessageId())
         );
     }
 

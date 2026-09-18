@@ -133,7 +133,7 @@ public class ChatServiceImpl implements ChatService {
         String userMessage = normalizedMessage(request.message(), request.attachmentIds());
         var attachments = chatAttachmentService == null
                 ? List.<com.example.aiapp.domain.dto.AiChatAttachmentDTO>of()
-                : chatAttachmentService.requireReady(userId, request.attachmentIds());
+                : attachmentsForNewTurn(userId, conversationId, request.attachmentIds());
 
         String aiMessage = withRecentImageContextUnlessCurrentImage(conversationId, userMessage, attachments);
         UsageService.Reservation reservation = usageService == null
@@ -185,6 +185,7 @@ public class ChatServiceImpl implements ChatService {
         assistantMetadata.put("turnId", turnId);
         assistantMetadata.put("phase", "COMPLETED");
         assistantMetadata.put("statusText", "回复完成");
+        assistantMetadata.putAll(attachmentContextMetadata(attachments, userEntity.getId()));
         Map<String, Object> safeDebug = chatDebugMetadataSanitizer.sanitize(
                 debugPayload(aiResponse, request.knowledgeBaseIds())
         );
@@ -269,7 +270,7 @@ public class ChatServiceImpl implements ChatService {
                             retryUser.getId(),
                             request.attachmentIds()
                     )
-                    : chatAttachmentService.requireReady(userId, request.attachmentIds());
+                    : attachmentsForNewTurn(userId, conversationId, request.attachmentIds());
 
         String aiMessage = withRecentImageContextUnlessCurrentImage(conversationId, userMessage, attachments);
         UsageService.Reservation reservation = usageService == null
@@ -320,6 +321,7 @@ public class ChatServiceImpl implements ChatService {
         initialMetadata.put("phase", "THINKING");
         initialMetadata.put("statusText", "正在理解你的需求…");
         initialMetadata.put("processStartedAt", System.currentTimeMillis());
+        initialMetadata.putAll(attachmentContextMetadata(attachments, sourceUserEntity.getId()));
         initialMetadata.putAll(chatDebugMetadataSanitizer.sanitize(Map.of(
                 "knowledgeBaseIds", request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds()
         )));
@@ -353,6 +355,8 @@ public class ChatServiceImpl implements ChatService {
                 "message", "正在理解你的需求…",
                 "processStartedAt", initialMetadata.get("processStartedAt")
         )));
+        Map<String, Object> attachmentContext = attachmentContextMetadata(attachments, sourceUserEntity.getId());
+        if (!attachmentContext.isEmpty()) chunkConsumer.accept(sse("meta", attachmentContext));
         AtomicBoolean responding = new AtomicBoolean();
         AtomicBoolean textDirty = new AtomicBoolean();
         java.util.concurrent.atomic.AtomicLong lastTextSave = new java.util.concurrent.atomic.AtomicLong();
@@ -582,6 +586,8 @@ public class ChatServiceImpl implements ChatService {
             data.remove("processCompletedAt");
             data.remove("toolCalls");
             data.remove("processTimeline");
+            data.remove("attachmentContextInherited");
+            data.remove("attachmentContextSourceMessageId");
         }
         if ("turn.status".equals(currentEvent) && "COMPLETED".equals(data.get("phase"))) {
             // A terminal status without the protocol's done marker is an interrupted response.
@@ -781,6 +787,8 @@ public class ChatServiceImpl implements ChatService {
                     rawDebug.remove("processCompletedAt");
                     rawDebug.remove("toolCalls");
                     rawDebug.remove("processTimeline");
+                    rawDebug.remove("attachmentContextInherited");
+                    rawDebug.remove("attachmentContextSourceMessageId");
                     // Only ids already validated against the current user may reach durable metadata.
                     rawDebug.put("knowledgeBaseIds", metadata.getOrDefault("knowledgeBaseIds", List.of()));
                     rawDebug.put(
@@ -1270,6 +1278,21 @@ public class ChatServiceImpl implements ChatService {
         if (!StringUtils.isBlank(message)) return message.trim();
         if (attachmentIds != null && !attachmentIds.isEmpty()) return "请分析这些附件";
         throw new ResponseStatusException(BAD_REQUEST, "消息或附件不能为空");
+    }
+
+    private List<AiChatAttachmentDTO> attachmentsForNewTurn(Long userId, String conversationId, List<String> attachmentIds) {
+        return attachmentIds == null || attachmentIds.isEmpty()
+                ? chatAttachmentService.requireRecentForConversation(userId, conversationId)
+                : chatAttachmentService.requireReady(userId, attachmentIds);
+    }
+
+    private Map<String, Object> attachmentContextMetadata(List<AiChatAttachmentDTO> attachments, Long messageId) {
+        if (attachments == null || attachments.isEmpty()) return Map.of();
+        String source = attachments.get(0).sourceMessageId();
+        if (source == null && messageId != null) source = String.valueOf(messageId);
+        if (source == null) return Map.of();
+        return Map.of("attachmentContextSourceMessageId", source,
+                "attachmentContextInherited", !source.equals(String.valueOf(messageId)));
     }
 
     private String withRecentImageContext(String conversationId, String message) {

@@ -111,6 +111,12 @@ final class ChatDebugMetadataSanitizer {
             long value = positiveInteger(source.get(key));
             if (value > 0) safe.put(key, value);
         }
+        if (source.get("attachmentContextSourceMessageId") instanceof String messageId
+                && messageId.matches("[1-9][0-9]{0,18}")
+                && source.get("attachmentContextInherited") instanceof Boolean inherited) {
+            safe.put("attachmentContextSourceMessageId", messageId);
+            safe.put("attachmentContextInherited", inherited);
+        }
         safe.put("toolResults", toolResults(source.get("toolResults"), state));
         safe.put("review", review(source.get("review"), state));
         safe.put("usage", usage(source.get("usage")));

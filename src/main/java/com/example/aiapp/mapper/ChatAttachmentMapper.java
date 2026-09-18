@@ -24,6 +24,13 @@ public interface ChatAttachmentMapper extends BaseMapper<ChatAttachmentEntity> {
             @Param("messageId") Long messageId
     );
 
+    /** 最近一次包含附件的用户消息；重试时不能读取原消息之后上传的文件。 */
+    List<ChatAttachmentEntity> selectRecentAttachedForConversation(
+            @Param("userId") Long userId,
+            @Param("conversationId") Long conversationId,
+            @Param("atOrBeforeMessageId") Long atOrBeforeMessageId
+    );
+
     /** 查询指定时间前过期的未绑定附件。 */
     List<ChatAttachmentEntity> selectExpiredReady(
             @Param("expiredBefore") LocalDateTime expiredBefore,

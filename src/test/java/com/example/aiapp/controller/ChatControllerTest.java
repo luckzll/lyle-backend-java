@@ -28,7 +28,11 @@ class ChatControllerTest {
     void preflightRejectionPublishesExplicitFailureWithoutADurableTurn() throws Exception {
         for (var failure : List.of(
                 new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "知识库不存在"),
-                new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.PAYMENT_REQUIRED, "当前 AI 额度不足，请升级套餐或购买额度后主动重试。")
+                new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.PAYMENT_REQUIRED, "当前 AI 额度不足，请升级套餐或购买额度后主动重试。"),
+                new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "单轮普通附件最多 8 个，目录内文件最多 200 个"),
+                new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "单轮图片最多 8 张（含目录内图片）"),
+                new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "文本附件必须使用 UTF-8 编码"),
+                new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "请选择非空附件")
         )) {
             ChatService service = mock(ChatService.class);
             org.mockito.Mockito.doThrow(failure).when(service).stream(eq(42L), any(), any());
