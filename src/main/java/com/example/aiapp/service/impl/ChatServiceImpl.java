@@ -414,7 +414,9 @@ public class ChatServiceImpl implements ChatService {
                 throw new IllegalStateException("AI stream ended without a completion event");
             }
             String finalUpstreamPhase = upstreamPhase.get();
+            List<Map<String, Object>> unfinishedToolCalls;
             synchronized (activeTurn) {
+                unfinishedToolCalls = interruptRunningToolCalls(activeTurn.metadata(), "执行已结束，未收到该工具的完成结果。");
                 if (!"FAILED".equals(finalUpstreamPhase)) {
                     activeTurn.metadata().put("phase", "COMPLETED");
                     activeTurn.metadata().put("statusText", "回复完成");
@@ -423,6 +425,7 @@ public class ChatServiceImpl implements ChatService {
                 activeTurn.metadata().putIfAbsent("processCompletedAt", System.currentTimeMillis());
                 persistActiveTurn(activeTurn);
             }
+            unfinishedToolCalls.forEach(call -> chunkConsumer.accept(sse("tool.call", call)));
             if (!"FAILED".equals(finalUpstreamPhase)) {
                 chunkConsumer.accept(sse("turn.status", Map.of(
                         "turnId", turnId,
@@ -440,18 +443,21 @@ public class ChatServiceImpl implements ChatService {
             }
             String failureMessage = streamFailureMessage(exception);
             List<Map<String, Object>> interruptedSteps;
+            List<Map<String, Object>> interruptedToolCalls;
             synchronized (activeTurn) {
                 activeTurn.metadata().put("phase", "FAILED");
                 activeTurn.metadata().put("statusText", failureMessage);
                 activeTurn.metadata().putIfAbsent("processCompletedAt", System.currentTimeMillis());
                 failUnfinishedImageItems(activeTurn.metadata(), "图片任务已中断");
                 interruptedSteps = interruptRunningSteps(activeTurn.metadata(), "已中断：" + failureMessage);
+                interruptedToolCalls = interruptRunningToolCalls(activeTurn.metadata(), "连接已中断，未收到工具完成结果。");
                 activeTurn.message().setContent(
                         assistantAnswer.isEmpty() ? failureMessage : assistantAnswer.toString()
                 );
                 persistActiveTurn(activeTurn);
             }
             interruptedSteps.forEach(step -> chunkConsumer.accept(sse("agent.step", step)));
+            interruptedToolCalls.forEach(call -> chunkConsumer.accept(sse("tool.call", call)));
             chunkConsumer.accept(sse("turn.status", Map.of(
                     "turnId", turnId,
                     "phase", "FAILED",
@@ -565,11 +571,17 @@ public class ChatServiceImpl implements ChatService {
             data = acceptedReasoningEvent(activeTurn, data);
             if (data.isEmpty()) return false;
         }
+        if ("tool.call".equals(currentEvent)) {
+            data = chatDebugMetadataSanitizer.toolCallEvent(data, activeTurn.turnId());
+            if (data.isEmpty() || !isNewToolCall(activeTurn, data)) return false;
+        }
         if ("meta".equals(currentEvent)) {
             data.remove("agentProgress");
             data.remove("reasoning");
             data.remove("processStartedAt");
             data.remove("processCompletedAt");
+            data.remove("toolCalls");
+            data.remove("processTimeline");
         }
         if ("turn.status".equals(currentEvent) && "COMPLETED".equals(data.get("phase"))) {
             // A terminal status without the protocol's done marker is an interrupted response.
@@ -585,6 +597,14 @@ public class ChatServiceImpl implements ChatService {
         } else if ("error".equals(currentEvent)) {
             upstreamPhase.set("FAILED");
         }
+        if ("error".equals(currentEvent)
+                || ("turn.status".equals(currentEvent) && "FAILED".equals(data.get("phase")))) {
+            synchronized (activeTurn) {
+                List<Map<String, Object>> interrupted = interruptRunningToolCalls(activeTurn.metadata(), "任务已中断，未收到工具完成结果。");
+                if (!interrupted.isEmpty()) persistActiveTurn(activeTurn);
+                interrupted.forEach(call -> downstream.accept(sse("tool.call", call)));
+            }
+        }
         if ("turn.status".equals(currentEvent)) {
             data.remove("processStartedAt");
             data.remove("processCompletedAt");
@@ -597,6 +617,38 @@ public class ChatServiceImpl implements ChatService {
         // Forward complete frames: lifecycle events and heartbeats can never split upstream JSON.
         downstream.accept(sse(currentEvent, data));
         return receivedDelta;
+    }
+
+    private boolean isNewToolCall(ActiveTurn activeTurn, Map<String, Object> data) {
+        synchronized (activeTurn) {
+            for (Map<String, Object> previous : mapList(activeTurn.metadata().get("toolCalls"))) {
+                if (data.get("callId").equals(previous.get("callId"))) {
+                    return chatDebugMetadataSanitizer.isNewToolCall(previous, data);
+                }
+            }
+            return true;
+        }
+    }
+
+    private void appendProcessReference(Map<String, Object> metadata, String type, String id) {
+        List<Map<String, Object>> timeline = new ArrayList<>(mapList(metadata.get("processTimeline")));
+        timeline.add(Map.of("type", type, "id", id));
+        metadata.put("processTimeline", chatDebugMetadataSanitizer.processTimeline(timeline, metadata));
+    }
+
+    private void appendReasoningTimeline(Map<String, Object> metadata, Map<String, Object> data) {
+        List<Map<String, Object>> timeline = new ArrayList<>(mapList(metadata.get("processTimeline")));
+        Map<String, Object> last = timeline.isEmpty() ? Map.of() : timeline.get(timeline.size() - 1);
+        Map<String, Object> segment = new LinkedHashMap<>();
+        boolean adjacent = "reasoning".equals(last.get("type")) && data.get("kind").equals(last.get("kind"));
+        segment.put("type", "reasoning");
+        segment.put("id", adjacent ? last.get("id") : "r-" + data.get("sequence"));
+        segment.put("text", (adjacent ? stringValue(last.get("text")) : "") + data.get("delta"));
+        segment.put("kind", data.get("kind"));
+        segment.put("sequence", data.get("sequence"));
+        if (adjacent) timeline.set(timeline.size() - 1, segment);
+        else timeline.add(segment);
+        metadata.put("processTimeline", chatDebugMetadataSanitizer.processTimeline(timeline, metadata));
     }
 
     private Map<String, Object> acceptedReasoningEvent(ActiveTurn activeTurn, Map<String, Object> raw) {
@@ -655,20 +707,41 @@ public class ChatServiceImpl implements ChatService {
                             "text", stringValue(previous.get("text")) + data.get("delta"),
                             "kind", data.get("kind"), "sequence", data.get("sequence")
                     ));
+                    appendReasoningTimeline(metadata, data);
                     // Checkpoint reasoning with answer text, never a write per model token.
+                }
+                case "tool.call" -> {
+                    List<Map<String, Object>> calls = new ArrayList<>(mapList(metadata.get("toolCalls")));
+                    boolean first = true;
+                    for (int index = 0; index < calls.size(); index++) {
+                        if (data.get("callId").equals(calls.get(index).get("callId"))) {
+                            calls.set(index, data);
+                            first = false;
+                            break;
+                        }
+                    }
+                    if (first) calls.add(data);
+                    if (calls.size() > ChatDebugMetadataSanitizer.MAX_TOOL_CALLS) calls.remove(0);
+                    metadata.put("toolCalls", calls);
+                    if (first) appendProcessReference(metadata, "tool", stringValue(data.get("callId")));
+                    changed = true;
                 }
                 case "agent.step" -> {
                     List<Map<String, Object>> progress = new ArrayList<>();
+                    boolean first = true;
                     if (metadata.get("agentProgress") instanceof List<?> previous) {
                         for (Object item : previous) {
                             if (item instanceof Map<?, ?> step && !data.get("step").equals(step.get("step"))) {
                                 progress.add(mapValue(step));
+                            } else if (item instanceof Map<?, ?> step && data.get("step").equals(step.get("step"))) {
+                                first = false;
                             }
                         }
                     }
                     progress.add(data);
                     progress.sort(java.util.Comparator.comparingLong(item -> ((Number) item.get("sequence")).longValue()));
                     metadata.put("agentProgress", progress);
+                    if (first) appendProcessReference(metadata, "agent", stringValue(data.get("step")));
                     changed = true;
                 }
                 case "turn.status" -> {
@@ -706,6 +779,8 @@ public class ChatServiceImpl implements ChatService {
                     rawDebug.remove("reasoning");
                     rawDebug.remove("processStartedAt");
                     rawDebug.remove("processCompletedAt");
+                    rawDebug.remove("toolCalls");
+                    rawDebug.remove("processTimeline");
                     // Only ids already validated against the current user may reach durable metadata.
                     rawDebug.put("knowledgeBaseIds", metadata.getOrDefault("knowledgeBaseIds", List.of()));
                     rawDebug.put(
@@ -932,6 +1007,7 @@ public class ChatServiceImpl implements ChatService {
         metadata.put("phase", "FAILED");
         metadata.put("statusText", "已停止生成");
         interruptRunningSteps(metadata, "已中断：用户停止了本轮生成。");
+        interruptRunningToolCalls(metadata, "用户已停止本轮执行。");
         if (metadata.get("imageBatch") instanceof Map<?, ?> rawBatch) {
             Map<String, Object> batch = (Map<String, Object>) rawBatch;
             batch.put("status", "CANCELLED");
@@ -976,6 +1052,22 @@ public class ChatServiceImpl implements ChatService {
         }
         progress.sort(java.util.Comparator.comparingLong(step -> ((Number) step.get("sequence")).longValue()));
         metadata.put("agentProgress", progress);
+        return interrupted;
+    }
+
+    private List<Map<String, Object>> interruptRunningToolCalls(Map<String, Object> metadata, String reason) {
+        if (!(metadata.get("toolCalls") instanceof List<?>)) return List.of();
+        List<Map<String, Object>> calls = chatDebugMetadataSanitizer.toolCalls(metadata.get("toolCalls"), metadata.get("turnId"));
+        long sequence = calls.stream().mapToLong(call -> ((Number) call.get("sequence")).longValue()).max().orElse(0);
+        List<Map<String, Object>> interrupted = new ArrayList<>();
+        for (Map<String, Object> call : calls) {
+            if (!"running".equals(call.get("status"))) continue;
+            call.put("status", "interrupted");
+            call.put("summary", reason);
+            call.put("sequence", Math.min(++sequence, 9_007_199_254_740_991L));
+            interrupted.add(call);
+        }
+        metadata.put("toolCalls", calls);
         return interrupted;
     }
 

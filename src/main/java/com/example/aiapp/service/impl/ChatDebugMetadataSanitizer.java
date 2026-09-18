@@ -27,6 +27,13 @@ final class ChatDebugMetadataSanitizer {
 
     static final String DEBUG_VERSION = "chat-debug-v1";
     static final int MAX_REASONING_CHARS = 16_000;
+    static final int MAX_TOOL_CALLS = 128;
+    static final int MAX_PROCESS_ENTRIES = 512;
+    private static final Pattern TOOL_CALL_ID = Pattern.compile("[A-Za-z0-9_-]{1,80}");
+    private static final Pattern TOOL_NAME = Pattern.compile("[A-Za-z0-9_.:-]{1,128}");
+    private static final Set<String> TOOL_CALL_STATUSES = Set.of(
+            "running", "completed", "failed", "awaiting_confirmation", "needs_clarification", "interrupted"
+    );
 
     private static final int MAX_DEBUG_BYTES = 128 * 1024;
     private static final int MAX_TRACE_ITEMS = 40;
@@ -121,7 +128,111 @@ final class ChatDebugMetadataSanitizer {
         safe.put("debugCounts", debugCounts(source));
         enforceTotalLimit(safe, state);
         safe.put("debugTruncated", state.truncated);
+        // Process history has independent field/count bounds and must not be
+        // erased by diagnostic compaction (like the separate image batch).
+        if (source.containsKey("toolCalls")) {
+            safe.put("toolCalls", toolCalls(source.get("toolCalls"), source.get("turnId")));
+        }
+        if (source.containsKey("processTimeline")) {
+            safe.put("processTimeline", processTimeline(source.get("processTimeline"), safe));
+        }
         return safe;
+    }
+
+    Map<String, Object> toolCallEvent(Map<String, ?> source, String turnId) {
+        if (source == null || turnId == null || turnId.isBlank() || turnId.length() > 160 || !turnId.equals(source.get("turnId"))
+                || !(source.get("callId") instanceof String id) || !TOOL_CALL_ID.matcher(id).matches()
+                || !(source.get("tool") instanceof String tool) || !TOOL_NAME.matcher(tool).matches()
+                || !(source.get("title") instanceof String title) || title.isBlank()
+                || !(source.get("status") instanceof String status) || !TOOL_CALL_STATUSES.contains(status)
+                || positiveInteger(source.get("sequence")) == 0) return Map.of();
+        String safeTitle = text(title.replaceAll("[\\p{Cc}]", ""), 80, new LimitState());
+        if (safeTitle.isBlank()) return Map.of();
+        Map<String, Object> safe = new LinkedHashMap<>();
+        safe.put("turnId", turnId);
+        safe.put("sequence", positiveInteger(source.get("sequence")));
+        safe.put("callId", id);
+        safe.put("tool", tool);
+        safe.put("title", safeTitle);
+        safe.put("status", status);
+        if (source.get("summary") instanceof String summary) {
+            putText(safe, "summary", summary.replaceAll("[\\p{Cc}]", ""), 240, new LimitState());
+        }
+        putDuration(safe, "durationMs", source.get("durationMs"));
+        return safe;
+    }
+
+    List<Map<String, Object>> toolCalls(Object value, Object expectedTurnId) {
+        Map<String, Map<String, Object>> latest = new LinkedHashMap<>();
+        for (Object item : list(value)) {
+            Map<?, ?> raw = map(item);
+            if (!(raw.get("turnId") instanceof String turnId) || turnId.length() > 160
+                    || (expectedTurnId != null && !expectedTurnId.equals(turnId))) continue;
+            Map<String, Object> source = new LinkedHashMap<>();
+            raw.forEach((key, data) -> source.put(String.valueOf(key), data));
+            Map<String, Object> event = toolCallEvent(source, turnId);
+            if (event.isEmpty()) continue;
+            String id = String.valueOf(event.get("callId"));
+            Map<String, Object> previous = latest.get(id);
+            if (previous != null && !isNewToolCall(previous, event)) continue;
+            if (previous == null && latest.size() >= MAX_TOOL_CALLS) latest.remove(latest.keySet().iterator().next());
+            latest.put(id, event);
+        }
+        return new ArrayList<>(latest.values());
+    }
+
+    boolean isNewToolCall(Map<String, Object> previous, Map<String, Object> event) {
+        return previous.get("tool").equals(event.get("tool"))
+                && positiveInteger(event.get("sequence")) > positiveInteger(previous.get("sequence"))
+                && ("running".equals(previous.get("status")) || previous.get("status").equals(event.get("status")));
+    }
+
+    List<Map<String, Object>> processTimeline(Object value, Map<String, ?> metadata) {
+        Set<String> agents = new LinkedHashSet<>();
+        for (Object item : list(metadata.get("agentProgress"))) {
+            if (map(item).get("step") instanceof String step) agents.add(step);
+        }
+        Set<String> calls = new LinkedHashSet<>();
+        for (Object item : list(metadata.get("toolCalls"))) {
+            if (map(item).get("callId") instanceof String callId) calls.add(callId);
+        }
+        List<Map<String, Object>> safe = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        List<?> entries = list(value);
+        for (Object item : entries) {
+            Map<?, ?> source = map(item);
+            if (!(source.get("type") instanceof String type) || !(source.get("id") instanceof String id)) continue;
+            Map<String, Object> entry = new LinkedHashMap<>();
+            if ("agent".equals(type) ? !agents.contains(id) : "tool".equals(type) ? !calls.contains(id) : !"reasoning".equals(type)) continue;
+            if (seen.contains(type + ":" + id)) continue;
+            entry.put("type", type);
+            entry.put("id", id);
+            if ("reasoning".equals(type)) {
+                if (!id.startsWith("r-") || positiveInteger(id.substring(2)) == 0
+                        || positiveInteger(source.get("sequence")) < positiveInteger(id.substring(2))
+                        || !reasoningKind(source.get("kind")) || !(source.get("text") instanceof String content)) continue;
+                String text = reasoningText(content);
+                if (text.isEmpty()) continue;
+                entry.put("text", text);
+                entry.put("kind", source.get("kind"));
+                entry.put("sequence", positiveInteger(source.get("sequence")));
+            }
+            seen.add(type + ":" + id);
+            safe.add(entry);
+            if (safe.size() > MAX_PROCESS_ENTRIES) safe.remove(0);
+        }
+        int remaining = MAX_REASONING_CHARS;
+        List<Map<String, Object>> bounded = new ArrayList<>();
+        for (Map<String, Object> entry : safe) {
+            if ("reasoning".equals(entry.get("type"))) {
+                String text = truncateReasoning((String) entry.get("text"), remaining);
+                if (text.isEmpty()) continue;
+                entry.put("text", text);
+                remaining -= text.length();
+            }
+            bounded.add(entry);
+        }
+        return bounded;
     }
 
     Map<String, Object> progressEvent(Map<String, ?> source, String turnId) {
