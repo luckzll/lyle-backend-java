@@ -24,8 +24,18 @@ final class ClientIpResolver {
         if (forwarded == null || forwarded.isBlank()) {
             return remoteAddress;
         }
-        String candidate = normalizeAddress(forwarded.split(",")[0]);
-        return isValidAddress(candidate) ? candidate : remoteAddress;
+        // Walk from the socket peer towards the client. Everything to the left
+        // of the first untrusted hop can have been supplied by that hop.
+        String candidate = remoteAddress;
+        String[] hops = forwarded.split(",", -1);
+        for (int index = hops.length - 1; index >= 0 && isTrusted(candidate); index--) {
+            String hop = normalizeAddress(hops[index]);
+            if (!isValidAddress(hop)) {
+                return remoteAddress;
+            }
+            candidate = hop;
+        }
+        return candidate;
     }
 
     private boolean isTrusted(String address) {
@@ -64,7 +74,21 @@ final class ClientIpResolver {
             return false;
         }
         // Do not perform DNS lookups for forwarded values.
-        return value.matches("[0-9a-fA-F:.]+");
+        if (!value.matches("[0-9a-fA-F:.]+")) return false;
+        // Require four decimal octets for IPv4 (no abbreviated numeric hosts).
+        if (!value.contains(":")) {
+            String[] octets = value.split("\\.", -1);
+            if (octets.length != 4) return false;
+            for (String octet : octets) {
+                if (!octet.matches("[0-9]{1,3}") || Integer.parseInt(octet) > 255) return false;
+            }
+        }
+        try {
+            InetAddress.getByName(value);
+            return true;
+        } catch (UnknownHostException exception) {
+            return false;
+        }
     }
 
     private static String normalizeAddress(String value) {
