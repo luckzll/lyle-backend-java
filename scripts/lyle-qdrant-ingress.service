@@ -1,0 +1,13 @@
+[Unit]
+Description=Restrict Lyle Qdrant ingress to local and Docker clients
+After=docker.service network-online.target
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lyle-qdrant-ingress apply eth0
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target docker.service
