@@ -1,0 +1,2 @@
+scripts/qdrant-ingress-guard.sh text eol=lf
+scripts/lyle-qdrant-ingress.service text eol=lf
