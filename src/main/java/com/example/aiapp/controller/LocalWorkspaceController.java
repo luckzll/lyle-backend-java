@@ -8,6 +8,7 @@ import com.example.aiapp.utils.CurrentUserUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -21,6 +22,8 @@ import java.util.*;
 @RestController
 @RequestMapping("/local-workspace")
 public class LocalWorkspaceController {
+    private static final List<String> READ_TOOLS = List.of("workspace_list", "workspace_read", "workspace_search");
+    private static final List<String> AGENT_TOOLS = List.of("workspace_list", "workspace_read", "workspace_search", "workspace_edit", "workspace_create");
     private final AiServiceClient ai;
     private final AiConfigService config;
     private final UsageService usage;
@@ -32,11 +35,22 @@ public class LocalWorkspaceController {
         this.ai = ai; this.config = config; this.usage = usage; this.billing = billing; this.json = json;
     }
 
-    public record Step(@NotEmpty @Size(max=100) List<Map<String, Object>> messages) {}
+    public record Step(@NotEmpty @Size(max=100) List<Map<String, Object>> messages,
+                       @Pattern(regexp="chat|agent") String mode, Boolean workspaceConnected) {
+        public Step(List<Map<String, Object>> messages) { this(messages, "agent", true); }
+    }
 
     @PostMapping(value="/step/stream", produces=MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<StreamingResponseBody> step(@Valid @RequestBody Step request) {
         Long userId = CurrentUserUtils.currentUserId();
+        String mode = request.mode() == null ? "agent" : request.mode();
+        boolean connected = !Boolean.FALSE.equals(request.workspaceConnected());
+        if (!Set.of("chat", "agent").contains(mode))
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "工作区模式无效");
+        if (mode.equals("agent") && !connected)
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "执行模式需要先连接本机目录");
+        // The caller cannot expand this list through a prompt or a request-body tool_allowlist.
+        List<String> allowedTools = !connected ? List.of() : mode.equals("chat") ? READ_TOOLS : AGENT_TOOLS;
         try {
             if (json.writeValueAsString(request.messages()).length() > 220_000)
                 throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "工作区上下文已满，请开始新对话");
@@ -54,6 +68,8 @@ public class LocalWorkspaceController {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("user_id", userId.toString()); payload.put("turn_id", turnId);
                 payload.put("messages", request.messages()); payload.put("ai_config", config.currentConfigMap());
+                payload.put("mode", mode); payload.put("workspace_connected", connected);
+                payload.put("tool_allowlist", allowedTools);
                 payload.put("traceId", reservation.traceId()); payload.put("reservationId", reservation.reservationId());
                 payload.put("usageBudget", Map.of("maxCalls", 1L, "maxInputTokens", reservation.maxInputTokens(),
                         "maxOutputTokens", reservation.maxOutputTokens(), "maxCostMicros", reservation.maxCostMicros()));
