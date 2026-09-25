@@ -3,6 +3,7 @@ package com.example.aiapp.controller;
 import com.example.aiapp.billing.BillingService;
 import com.example.aiapp.infrastructure.client.AiServiceClient;
 import com.example.aiapp.service.AiConfigService;
+import com.example.aiapp.service.impl.ChatModelCatalog;
 import com.example.aiapp.usage.UsageService;
 import com.example.aiapp.utils.CurrentUserUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,8 +37,11 @@ public class LocalWorkspaceController {
     }
 
     public record Step(@NotEmpty @Size(max=100) List<Map<String, Object>> messages,
-                       @Pattern(regexp="chat|agent") String mode, Boolean workspaceConnected) {
-        public Step(List<Map<String, Object>> messages) { this(messages, "agent", true); }
+                       @Pattern(regexp="chat|agent") String mode, Boolean workspaceConnected, String modelId) {
+        public Step(List<Map<String, Object>> messages) { this(messages, "agent", true, null); }
+        public Step(List<Map<String, Object>> messages, String mode, Boolean workspaceConnected) {
+            this(messages, mode, workspaceConnected, null);
+        }
     }
 
     @PostMapping(value="/step/stream", produces=MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -49,6 +53,7 @@ public class LocalWorkspaceController {
             throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "工作区模式无效");
         if (mode.equals("agent") && !connected)
             throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "执行模式需要先连接本机目录");
+        Map<String, String> modelConfig = ChatModelCatalog.apply(request.modelId(), config.currentConfigMap());
         // The caller cannot expand this list through a prompt or a request-body tool_allowlist.
         List<String> allowedTools = !connected ? List.of() : mode.equals("chat") ? READ_TOOLS : AGENT_TOOLS;
         try {
@@ -67,7 +72,7 @@ public class LocalWorkspaceController {
                 commercial = billing.reserveCommercial(userId, turnId);
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("user_id", userId.toString()); payload.put("turn_id", turnId);
-                payload.put("messages", request.messages()); payload.put("ai_config", config.currentConfigMap());
+                payload.put("messages", request.messages()); payload.put("ai_config", modelConfig);
                 payload.put("mode", mode); payload.put("workspace_connected", connected);
                 payload.put("tool_allowlist", allowedTools);
                 payload.put("traceId", reservation.traceId()); payload.put("reservationId", reservation.reservationId());

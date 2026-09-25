@@ -66,6 +66,21 @@ class LocalWorkspaceControllerTest {
     }
 
     @Test
+    void selectedProjectModelUsesTheSameValidatedCatalogAsChat() throws Exception {
+        var messages = List.<Map<String, Object>>of(Map.of("role", "user", "content", "inspect"));
+        var selected = forwardedPayload(new LocalWorkspaceController.Step(messages, "agent", true, "qwen3.7-plus"));
+        assertThat(selected.get("ai_config")).isEqualTo(Map.of("CHAT_MODEL_PROVIDER", "qwen", "CHAT_MODEL_NAME", "qwen3.7-plus"));
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(new CurrentUser(42L, "test", "USER"), null));
+        try {
+            assertThatThrownBy(() -> new LocalWorkspaceController(
+                    mock(AiServiceClient.class), mock(AiConfigService.class), mock(UsageService.class),
+                    mock(BillingService.class), new ObjectMapper()).step(
+                    new LocalWorkspaceController.Step(messages, "agent", true, "unlisted-model")))
+                    .isInstanceOf(ResponseStatusException.class).hasMessageContaining("400");
+        } finally { SecurityContextHolder.clearContext(); }
+    }
+
+    @Test
     void omittedModeAndConnectionRetainLegacyAgentContract() throws Exception {
         var request = new ObjectMapper().readValue("{\"messages\":[{\"role\":\"user\",\"content\":\"inspect\"}]}", LocalWorkspaceController.Step.class);
         var sent = forwardedPayload(request);

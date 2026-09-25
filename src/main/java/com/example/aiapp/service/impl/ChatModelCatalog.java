@@ -10,7 +10,7 @@ import static org.springframework.http.HttpStatus.BAD_REQUEST;
 /**
  * AI 对话模型目录，负责将前端模型标识转换为后端路由配置。
  */
-final class ChatModelCatalog {
+public final class ChatModelCatalog {
 
     private static final Map<String, ModelRoute> ROUTES = Map.of(
             "qwen3.7-flash", new ModelRoute("qwen", "qwen3.7-flash"),
@@ -27,7 +27,7 @@ final class ChatModelCatalog {
     private ChatModelCatalog() {
     }
 
-    static Map<String, String> apply(String modelId, Map<String, String> baseConfig) {
+    public static Map<String, String> apply(String modelId, Map<String, String> baseConfig) {
         Map<String, String> result = new LinkedHashMap<>(baseConfig == null ? Map.of() : baseConfig);
         if (modelId == null || modelId.isBlank()) {
             return Map.copyOf(result);
