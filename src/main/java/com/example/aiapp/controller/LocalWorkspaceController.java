@@ -51,8 +51,6 @@ public class LocalWorkspaceController {
         boolean connected = !Boolean.FALSE.equals(request.workspaceConnected());
         if (!Set.of("chat", "agent").contains(mode))
             throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "工作区模式无效");
-        if (mode.equals("agent") && !connected)
-            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "执行模式需要先连接本机目录");
         Map<String, String> modelConfig = ChatModelCatalog.apply(request.modelId(), config.currentConfigMap());
         // The caller cannot expand this list through a prompt or a request-body tool_allowlist.
         List<String> allowedTools = !connected ? List.of() : mode.equals("chat") ? READ_TOOLS : AGENT_TOOLS;

@@ -63,6 +63,9 @@ class LocalWorkspaceControllerTest {
         var disconnected = forwardedPayload(new LocalWorkspaceController.Step(messages, "chat", false));
         assertThat(disconnected.get("workspace_connected")).isEqualTo(false);
         assertThat(disconnected.get("tool_allowlist")).isEqualTo(List.of());
+        var disconnectedAgent = forwardedPayload(new LocalWorkspaceController.Step(messages, "agent", false));
+        assertThat(disconnectedAgent.get("mode")).isEqualTo("agent");
+        assertThat(disconnectedAgent.get("tool_allowlist")).isEqualTo(List.of());
     }
 
     @Test
@@ -90,7 +93,7 @@ class LocalWorkspaceControllerTest {
     }
 
     @Test
-    void disconnectedExecutionAndUnknownModesAreRejectedBeforeModelOrBilling() {
+    void unknownModesAreRejectedBeforeModelOrBilling() {
         var ai = mock(AiServiceClient.class);
         var config = mock(AiConfigService.class);
         var usage = mock(UsageService.class);
@@ -99,8 +102,6 @@ class LocalWorkspaceControllerTest {
         var messages = List.<Map<String, Object>>of(Map.of("role", "user", "content", "inspect"));
         SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(new CurrentUser(42L, "test", "USER"), null));
         try {
-            assertThatThrownBy(() -> controller.step(new LocalWorkspaceController.Step(messages, "agent", false)))
-                    .isInstanceOf(ResponseStatusException.class).hasMessageContaining("400");
             assertThatThrownBy(() -> controller.step(new LocalWorkspaceController.Step(messages, "unknown", true)))
                     .isInstanceOf(ResponseStatusException.class).hasMessageContaining("400");
             verifyNoInteractions(ai, config, usage, billing);
