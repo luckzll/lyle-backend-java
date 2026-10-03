@@ -81,6 +81,26 @@ public class AiServiceClient {
         });
     }
 
+    public Map<String, Object> extractLocalWorkspaceDocument(Map<String, Object> request) {
+        try {
+            return aiServiceWebClient.post().uri("/ai/local-workspace/document/extract")
+                    .contentType(MediaType.APPLICATION_JSON).bodyValue(request).retrieve()
+                    .onStatus(HttpStatusCode::isError, response -> response.releaseBody().then(
+                            reactor.core.publisher.Mono.just(new ResponseStatusException(
+                                    response.statusCode().value() == 413 ? org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE
+                                            : response.statusCode().is4xxClientError() ? org.springframework.http.HttpStatus.BAD_REQUEST
+                                            : org.springframework.http.HttpStatus.BAD_GATEWAY,
+                                    "文档无法解析，可能已损坏、加密或格式不符"))))
+                    .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                    .timeout(Duration.ofSeconds(30)).block();
+        } catch (ResponseStatusException error) {
+            throw error;
+        } catch (Exception error) {
+            // Never reflect document contents, provider responses, or exception details.
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_GATEWAY, "文档解析暂不可用，请稍后重试");
+        }
+    }
+
     /** Network buffers may split a UTF-8 code point, so decoding must span buffers. */
     private static final class StreamingUtf8Decoder {
         private final java.nio.charset.CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder();

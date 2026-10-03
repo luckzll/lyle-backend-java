@@ -44,6 +44,30 @@ public class LocalWorkspaceController {
         }
     }
 
+    public record Document(@Size(min=1, max=128) String name,
+                           @Size(min=4, max=6990508) String data) {}
+
+    @PostMapping(value="/document/extract", consumes=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Map<String, Object>> extractDocument(@Valid @RequestBody Document request) {
+        CurrentUserUtils.currentUserId();
+        String name = request.name(); String data = request.data();
+        if (name == null || name.length() > 128 || name.startsWith(".") || name.matches(".*[\\\\/:\\p{Cntrl}].*")
+                || !name.toLowerCase(Locale.ROOT).matches(".+\\.(pdf|docx|xlsx|xlsm|xls|pptx)"))
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "文档格式不支持；旧版 DOC/PPT 请转换为 DOCX/PPTX");
+        if (data == null || data.isEmpty() || data.length() > 6990508)
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE, "文档超过 5 MB 读取限制");
+        try {
+            byte[] decoded = Base64.getDecoder().decode(data);
+            if (decoded.length == 0 || decoded.length > 5 * 1024 * 1024 || !Base64.getEncoder().encodeToString(decoded).equals(data))
+                throw new IllegalArgumentException();
+        } catch (IllegalArgumentException error) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "文档数据无效");
+        }
+        // Parse the provided bytes without attaching them to chat, memory, RAG, or server storage.
+        Map<String, Object> result = ai.extractLocalWorkspaceDocument(Map.of("name", name, "data", data));
+        return ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore()).body(result);
+    }
+
     @PostMapping(value="/step/stream", produces=MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<StreamingResponseBody> step(@Valid @RequestBody Step request) {
         Long userId = CurrentUserUtils.currentUserId();
