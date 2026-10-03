@@ -141,6 +141,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
             ));
         } else if (path.endsWith("/experience/public-events")) {
             keys.add(new LimitKey("public-event:" + ip, positive(properties.authPerMinute(), 20)));
+        } else if (path.endsWith("/local-workspace/document/extract")) {
+            keys.add(new LimitKey("workspace-document:" + ip, Math.min(20, positive(properties.chatPerMinute(), 60))));
         } else if (path.endsWith("/chat/send") || path.endsWith("/chat/stream")
                 || path.endsWith("/local-workspace/step/stream")) {
             keys.add(new LimitKey("chat:" + ip, positive(properties.chatPerMinute(), 60)));
