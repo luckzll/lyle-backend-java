@@ -26,7 +26,8 @@ MAIL_FROM=your-address@gmail.com
 MAIL_FROM_NAME=Lyle AI
 ```
 
-使用未分享的应用专用密码。STARTTLS 必须成功，连接/读写有超时。服务器需要可访问 SMTP 服务；本地可访问不代表生产服务器可访问。
+使用未分享的应用专用密码。默认 587 端口必须完成 STARTTLS，连接/读写有超时。服务器需要可访问 SMTP 服务；本地可访问不代表生产服务器可访问。
+使用 `production,mail-proxy` profile 经 HTTP CONNECT 代理连接 Gmail 时，配置 `SPRING_MAIL_PORT=465`。该 profile 为 465 启用直连 TLS，并关闭 STARTTLS；不要将它与 587 端口搭配使用。
 MAIL_ENABLED 默认 false；关闭时前端显示服务不可用，发送和校验接口返回 503。
 上线需要后端重新构建、前端重新构建及 Flyway V31 迁移，不能只改 .env。
 
