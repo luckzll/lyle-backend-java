@@ -1,5 +1,6 @@
 package com.example.aiapp.security;
 
+import java.io.EOFException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -15,6 +16,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.mail.MailSendException;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import static org.springframework.http.HttpStatus.*;
@@ -108,7 +110,7 @@ public class EmailCodeService {
                 helper.setText("你的" + (purpose.startsWith("bind:") ? "绑定邮箱" : purpose.equals("password") ? "设置登录密码" : "登录") + "验证码是：" + code
                         + "\n5分钟内有效，仅可使用一次。请勿向他人提供验证码。如非本人操作，请忽略。",
                         VerificationEmail.html(code, purpose));
-                mail.send(message);
+                sendWithEofRetry(message);
             } catch (Exception e) {
                 Throwable cause = e;
                 while (cause.getCause() != null && cause.getCause() != cause) cause = cause.getCause();
@@ -119,6 +121,20 @@ public class EmailCodeService {
             }
         } catch (ResponseStatusException e) { throw e; }
         catch (RuntimeException e) { throw new ResponseStatusException(SERVICE_UNAVAILABLE, "邮箱验证服务暂不可用。"); }
+    }
+
+    private void sendWithEofRetry(jakarta.mail.internet.MimeMessage message) {
+        try {
+            mail.send(message);
+        } catch (MailSendException first) {
+            Throwable cause = first;
+            while (cause.getCause() != null && cause.getCause() != cause) cause = cause.getCause();
+            if (!(cause instanceof EOFException)) throw first;
+            // If the first attempt was accepted before the connection closed, both
+            // deliveries carry the same code and remain subject to one rate limit.
+            log.warn("Email SMTP connection closed unexpectedly; retrying once");
+            mail.send(message);
+        }
     }
 
     public String verify(String rawEmail, String code, String purpose) {

@@ -2,6 +2,7 @@ package com.example.aiapp.security;
 
 import jakarta.mail.Session;
 import jakarta.mail.internet.MimeMessage;
+import java.io.EOFException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Properties;
@@ -84,6 +85,15 @@ class EmailCodeServiceTest {
         var error = catchThrowableOfType(() -> service.send("a@example.com", "login"), ResponseStatusException.class);
         assertThat(error.getHeaders().getFirst("Retry-After")).isEqualTo("42");
         verify(redis).delete(startsWith("lyle:email:code:"));
+    }
+    @Test void transientEofRetriesTheSameCodeOnce() {
+        doThrow(new MailSendException("smtp EOF", new EOFException()))
+                .doNothing().when(mail).send(any(MimeMessage.class));
+        service.send("a@example.com", "login");
+        var messages = ArgumentCaptor.forClass(MimeMessage.class);
+        verify(mail, times(2)).send(messages.capture());
+        assertThat(messages.getAllValues().get(0)).isSameAs(messages.getAllValues().get(1));
+        verify(redis, never()).delete(startsWith("lyle:email:code:"));
     }
     @Test void invalidOrConsumedCodeCannotAuthenticate() {
         when(redis.execute(any(RedisScript.class), anyList(), anyString())).thenReturn(0L);
