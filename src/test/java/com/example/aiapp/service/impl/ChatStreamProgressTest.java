@@ -110,6 +110,28 @@ class ChatStreamProgressTest {
     }
 
     @Test
+    void explicitUpstreamErrorWithoutDoneRetainsItsMessageAndPartialAnswerInHistory() throws Exception {
+        for (String prefix : List.of("", "已生成的部分内容")) {
+            Fixture fixture = new Fixture();
+            String message = "当前所选模型的访问被模型服务拒绝（403），请切换其他模型后重试。";
+            List<String> upstream = new ArrayList<>();
+            if (!prefix.isEmpty()) upstream.add("event: delta\ndata: {\"text\":\"" + prefix + "\"}\n\n");
+            upstream.add("event: error\ndata: {\"message\":\"" + message + "\"}\n\n");
+            when(fixture.client.streamChat(any())).thenReturn(Flux.fromIterable(upstream));
+
+            fixture.run();
+
+            assertThat(fixture.latest().getContent()).isEqualTo(prefix.isEmpty() ? message : prefix);
+            Map<?, ?> metadata = new ObjectMapper().readValue(fixture.latest().getMetadataJson(), Map.class);
+            assertThat(metadata.get("phase")).isEqualTo("FAILED");
+            assertThat(metadata.get("statusText")).isEqualTo(message);
+            String output = String.join("", fixture.frames);
+            assertThat(output).contains(message, "event: done").doesNotContain("AI 回复连接中断", "\"phase\":\"COMPLETED\"");
+            assertThat(fixture.frames.stream().filter(frame -> frame.startsWith("event: error"))).hasSize(1);
+        }
+    }
+
+    @Test
     void cancellationClosesOnlyRunningStepsAndPreservesCompletedEvidence() throws Exception {
         Fixture fixture = new Fixture();
         ChatMessageEntity saved = new ChatMessageEntity();
@@ -168,7 +190,7 @@ class ChatStreamProgressTest {
 
         void run() {
             service.stream(42L, new ChatRequestDTO("temporary-conversation", "turn-progress", null, "你好", List.of()), frame -> {
-                if (frame.startsWith("event: done")) assertThat(latest().getMetadataJson()).contains("COMPLETED");
+                if (frame.startsWith("event: done")) assertThat(latest().getMetadataJson()).containsAnyOf("COMPLETED", "FAILED");
                 frames.add(frame);
             });
         }

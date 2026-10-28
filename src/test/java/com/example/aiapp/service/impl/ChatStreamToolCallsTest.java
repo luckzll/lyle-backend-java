@@ -158,7 +158,7 @@ class ChatStreamToolCallsTest {
                 frames.add(event("done", Map.of()));
             }
             when(fixture.client.streamChat(any())).thenReturn(Flux.fromIterable(frames));
-            if (terminal.equals("disconnect") || terminal.equals("error")) assertThatThrownBy(() -> fixture.run(frame -> {})).isInstanceOf(IllegalStateException.class);
+            if (terminal.equals("disconnect")) assertThatThrownBy(() -> fixture.run(frame -> {})).isInstanceOf(IllegalStateException.class);
             else fixture.run(frame -> {});
             List<Map<String, Object>> calls = items(fixture.history(fixture.latest()), "toolCalls");
             assertThat(calls).extracting(call -> call.get("status")).containsExactly("completed", "interrupted", "needs_clarification");

@@ -414,7 +414,10 @@ public class ChatServiceImpl implements ChatService {
             if (activeTurn.cancelled().get()) {
                 return;
             }
-            if (!upstreamDone.get()) {
+            // An explicit upstream failure is terminal even when the producer
+            // cannot send done. Preserve its actionable error instead of
+            // replacing it with a transport interruption.
+            if (!upstreamDone.get() && !"FAILED".equals(upstreamPhase.get())) {
                 throw new IllegalStateException("AI stream ended without a completion event");
             }
             String finalUpstreamPhase = upstreamPhase.get();
@@ -425,7 +428,8 @@ public class ChatServiceImpl implements ChatService {
                     activeTurn.metadata().put("phase", "COMPLETED");
                     activeTurn.metadata().put("statusText", "回复完成");
                 }
-                activeTurn.message().setContent(assistantAnswer.toString());
+                activeTurn.message().setContent(assistantAnswer.isEmpty() && "FAILED".equals(finalUpstreamPhase)
+                        ? stringValue(activeTurn.metadata().get("statusText")) : assistantAnswer.toString());
                 activeTurn.metadata().putIfAbsent("processCompletedAt", System.currentTimeMillis());
                 persistActiveTurn(activeTurn);
             }
@@ -801,7 +805,8 @@ public class ChatServiceImpl implements ChatService {
                 }
                 case "error" -> {
                     metadata.put("phase", "FAILED");
-                    metadata.put("statusText", "回复失败");
+                    String message = stringValue(data.get("message"));
+                    metadata.put("statusText", message.isBlank() ? "回复失败，请稍后重试。" : message);
                     metadata.putIfAbsent("processCompletedAt", System.currentTimeMillis());
                     failUnfinishedImageItems(metadata, stringValue(data.get("message")));
                     interruptRunningSteps(metadata, "已中断，未收到该步骤的完成结果。");
