@@ -37,7 +37,11 @@ public class LocalWorkspaceController {
     }
 
     public record Step(@NotEmpty @Size(max=100) List<Map<String, Object>> messages,
-                       @Pattern(regexp="chat|agent") String mode, Boolean workspaceConnected, String modelId) {
+                       @Pattern(regexp="chat|agent") String mode, Boolean workspaceConnected, String modelId,
+                       Map<String, Object> toolSelection) {
+        public Step(List<Map<String, Object>> messages, String mode, Boolean workspaceConnected, String modelId) {
+            this(messages, mode, workspaceConnected, modelId, null);
+        }
         public Step(List<Map<String, Object>> messages) { this(messages, "agent", true, null); }
         public Step(List<Map<String, Object>> messages, String mode, Boolean workspaceConnected) {
             this(messages, mode, workspaceConnected, null);
@@ -97,6 +101,7 @@ public class LocalWorkspaceController {
                 payload.put("messages", request.messages()); payload.put("ai_config", modelConfig);
                 payload.put("mode", mode); payload.put("workspace_connected", connected);
                 payload.put("tool_allowlist", allowedTools);
+                if (request.toolSelection() != null) payload.put("toolSelection", request.toolSelection());
                 payload.put("traceId", reservation.traceId()); payload.put("reservationId", reservation.reservationId());
                 payload.put("usageBudget", Map.of("maxCalls", 1L, "maxInputTokens", reservation.maxInputTokens(),
                         "maxOutputTokens", reservation.maxOutputTokens(), "maxCostMicros", reservation.maxCostMicros()));

@@ -17,8 +17,17 @@ public record AiChatRequestDTO(
         String reservationId,
         Map<String, Long> usageBudget,
         String sourceMessageId,
-        Map<String, Object> knowledgeScope
+        Map<String, Object> knowledgeScope,
+        Map<String, Object> toolSelection
 ) {
+    public AiChatRequestDTO(String userId, String conversationId, String turnId, Long projectId,
+                            String message, List<String> knowledgeBaseIds, boolean stream,
+                            Map<String, String> aiConfig, List<AiChatAttachmentDTO> attachments,
+                            String traceId, String reservationId, Map<String, Long> usageBudget,
+                            String sourceMessageId, Map<String, Object> knowledgeScope) {
+        this(userId, conversationId, turnId, projectId, message, knowledgeBaseIds, stream, aiConfig,
+                attachments, traceId, reservationId, usageBudget, sourceMessageId, knowledgeScope, null);
+    }
     public AiChatRequestDTO(String userId, String conversationId, String turnId, Long projectId,
                             String message, List<String> knowledgeBaseIds, boolean stream,
                             Map<String, String> aiConfig, List<AiChatAttachmentDTO> attachments,

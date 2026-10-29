@@ -22,6 +22,15 @@ import static org.mockito.Mockito.*;
 
 class LocalWorkspaceControllerTest {
     @Test
+    void selectedExternalToolsAreForwardedWithoutChangingLocalFilePermissions() throws Exception {
+        var selection = Map.<String, Object>of("mcpToolIds", List.of(7), "workspaceId", 3);
+        var messages = List.<Map<String, Object>>of(Map.of("role", "user", "content", "inspect"));
+        var sent = forwardedPayload(new LocalWorkspaceController.Step(messages, "agent", false, null, selection));
+        assertThat(sent.get("user_id")).isEqualTo("42");
+        assertThat(sent.get("toolSelection")).isEqualTo(selection);
+        assertThat(sent.get("tool_allowlist")).isEqualTo(List.of());
+    }
+    @Test
     void statelessRelayUsesAuthenticatedIdentityAndReleasesBothReservations() throws Exception {
         AiServiceClient ai = mock(AiServiceClient.class);
         AiConfigService config = mock(AiConfigService.class);

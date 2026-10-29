@@ -27,6 +27,16 @@ public class WorkbenchController {
         this.aiServiceClient = aiServiceClient;
     }
 
+    @GetMapping("/integrations")
+    Map<String, Object> integrations() {
+        return aiServiceClient.getJson("/ai/workbench/integrations/{userId}", currentUserId());
+    }
+
+    @PostMapping("/integrations/invoke")
+    Map<String, Object> invokeIntegration(@RequestBody Map<String, Object> request) {
+        return aiServiceClient.postJson("/ai/workbench/integrations/{userId}/invoke", request, currentUserId());
+    }
+
     @GetMapping("/mcp/servers")
     Map<String, Object> mcpServers() {
         return aiServiceClient.getJson("/ai/workbench/mcp/{userId}/servers", currentUserId());
