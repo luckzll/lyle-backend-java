@@ -168,7 +168,8 @@ public class ChatServiceImpl implements ChatService {
                 reservation == null ? null : reservation.reservationId(),
                 usageBudget(reservation),
                 String.valueOf(userEntity.getId()),
-                knowledgeScope
+                knowledgeScope,
+                request.toolSelection()
         );
         AiChatResponseDTO aiResponse;
         try {
@@ -310,7 +311,8 @@ public class ChatServiceImpl implements ChatService {
                 reservation == null ? null : reservation.reservationId(),
                 usageBudget(reservation),
                 String.valueOf(sourceUserEntity.getId()),
-                knowledgeScope
+                knowledgeScope,
+                request.toolSelection()
         );
         StringBuilder assistantAnswer = new StringBuilder();
         StringBuilder sseBuffer = new StringBuilder();
