@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.aiapp.domain.entity.KnowledgeFileEntity;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 
 import java.util.List;
 
@@ -14,6 +15,8 @@ import java.util.List;
  */
 @Mapper
 public interface KnowledgeFileMapper extends BaseMapper<KnowledgeFileEntity> {
+    @Select("SELECT id FROM knowledge_file WHERE id = #{id} AND knowledge_base_id = #{knowledgeBaseId} FOR UPDATE")
+    Long lockAdminRetry(@Param("id") Long id, @Param("knowledgeBaseId") Long knowledgeBaseId);
 
     /** 查询指定知识库的全部文件。 */
     List<KnowledgeFileEntity> selectByKnowledgeBaseId(Long knowledgeBaseId);
