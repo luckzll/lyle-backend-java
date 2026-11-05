@@ -38,4 +38,6 @@ public interface BillingAccountService {
     Map<String, Object> publishUsagePricing(BillingRequests.PublishUsagePricing request);
 
     Map<String, Object> grantManualCredits(long userId, BillingRequests.GrantCredits request);
+    /** Administrative grant without triggering user-facing welcome-credit initialization. */
+    void grantAdminCredits(long userId, BillingRequests.GrantCredits request);
 }

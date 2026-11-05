@@ -375,6 +375,13 @@ public class BillingAccountServiceImpl implements BillingAccountService {
             long userId,
             BillingRequests.GrantCredits request
     ) {
+        grantAdminCredits(userId,request);
+        return account(userId);
+    }
+
+    @Override
+    @Transactional
+    public void grantAdminCredits(long userId,BillingRequests.GrantCredits request) {
         Map<String, Object> account = ensureAccount(userId);
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime expiresAt = request.validityDays() == null
@@ -393,7 +400,6 @@ public class BillingAccountServiceImpl implements BillingAccountService {
                 "MANUAL_ADJUSTMENT",
                 Map.of("reason", request.reason() == null ? "" : request.reason())
         );
-        return account(userId);
     }
 
     private Map<String, Object> ensureAccount(long userId) {
