@@ -24,8 +24,11 @@
         <if test="forUpdate">FOR UPDATE</if>
     </select>
     <insert id="insertAccountIgnore">
-        INSERT IGNORE INTO commercial_account (id, user_id, status, version, created_at, updated_at)
+        <!-- Keep existing account fields unchanged while taking an exclusive duplicate-key lock.
+             INSERT IGNORE followed by FOR UPDATE can deadlock concurrent first-time grants. -->
+        INSERT INTO commercial_account (id, user_id, status, version, created_at, updated_at)
         VALUES (#{id}, #{userId}, 'ACTIVE', 0, #{createdAt}, #{createdAt})
+        ON DUPLICATE KEY UPDATE id = commercial_account.id
     </insert>
     <select id="lockAccountById" resultType="java.lang.Long">
         SELECT id FROM commercial_account WHERE id = #{accountId} FOR UPDATE

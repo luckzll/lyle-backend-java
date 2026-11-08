@@ -12,6 +12,7 @@ import jakarta.validation.constraints.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.web.server.ResponseStatusException;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -61,12 +62,14 @@ public class AdminUserService {
                         str(row.get("credit_micros")),str(row.get("balance_after_micros")),String.valueOf(row.get("source_id")),
                         time(row.get("occurred_at")),time(row.get("expires_at")),reason(row.get("metadata_json")))).toList();
     }
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public CreditView grant(long actor,long userId,GrantRequest request){
         var user=requireUser(userId);
         if(!"ACTIVE".equalsIgnoreCase(user.getStatus()))throw new ResponseStatusException(CONFLICT,"账号不可用，不能发放额度。");
         if(!properties.ledgerEnabled()||!properties.userViewEnabled())throw new ResponseStatusException(CONFLICT,"商业额度功能尚未启用。");
-        jdbc.update("INSERT IGNORE INTO admin_credit_operation (request_id,actor_id,user_id,credit_micros,validity_days,reason,status,created_at) VALUES (?,?,?,?,?,?,'PENDING',?)",
+        // Acquire an exclusive key lock directly; INSERT IGNORE can deadlock when
+        // simultaneous duplicates upgrade their shared locks at SELECT FOR UPDATE.
+        jdbc.update("INSERT INTO admin_credit_operation (request_id,actor_id,user_id,credit_micros,validity_days,reason,status,created_at) VALUES (?,?,?,?,?,?,'PENDING',?) ON DUPLICATE KEY UPDATE request_id=admin_credit_operation.request_id",
                 request.requestId(),actor,userId,request.creditMicros(),request.validityDays(),request.reason().trim(),LocalDateTime.now());
         var row=jdbc.queryForMap("SELECT * FROM admin_credit_operation WHERE request_id=? FOR UPDATE",request.requestId());
         if(number(row.get("actor_id"))!=actor||number(row.get("user_id"))!=userId||number(row.get("credit_micros"))!=request.creditMicros()

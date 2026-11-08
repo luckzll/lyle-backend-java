@@ -5,11 +5,10 @@ import com.example.aiapp.domain.vo.PageVO;
 import com.example.aiapp.utils.CurrentUserUtils;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
-import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
-@RestController @Validated @RequestMapping("/admin/users")
+@RestController @RequestMapping("/admin/users")
 public class AdminUserController {
     private final AdminUserService service;
     public AdminUserController(AdminUserService service){this.service=service;}

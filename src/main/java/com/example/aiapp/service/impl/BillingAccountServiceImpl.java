@@ -383,6 +383,9 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     @Transactional
     public void grantAdminCredits(long userId,BillingRequests.GrantCredits request) {
         Map<String, Object> account = ensureAccount(userId);
+        // Serialize grants with other mutations of the account so each ledger
+        // entry records the balance produced by that operation.
+        commercialAccountMapper.lockAccountById(number(account.get("id")));
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime expiresAt = request.validityDays() == null
                 ? null
