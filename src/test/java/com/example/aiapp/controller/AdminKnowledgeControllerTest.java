@@ -45,4 +45,14 @@ class AdminKnowledgeControllerTest {
         assertThatThrownBy(()->controller.retry(10L,3L)).isInstanceOf(ResponseStatusException.class).hasMessageContaining("409");
         verifyNoInteractions(service,audit);
     }
+    @Test void fileMetadataIsScopedToBaseAndNormalizesReadyStates(){
+        setup("ready");
+        var result = controller.file(10L,3L);
+        assertThat(result.id()).isEqualTo("3");
+        assertThat(result.knowledgeBaseId()).isEqualTo("10");
+        assertThat(result.parseStatus()).isEqualTo("COMPLETED");
+        when(files.selectByIdAndKnowledgeBaseId(3L,10L)).thenReturn(null);
+        assertThatThrownBy(()->controller.file(10L,3L)).isInstanceOf(ResponseStatusException.class).hasMessageContaining("404");
+        verifyNoInteractions(service,audit);
+    }
 }

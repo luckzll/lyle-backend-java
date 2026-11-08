@@ -15,7 +15,6 @@ import com.example.aiapp.service.AuditLogService;
 import com.example.aiapp.utils.CurrentUserUtils;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
-import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,7 +26,6 @@ import static org.springframework.http.HttpStatus.CONFLICT;
 
 /** Administrative metadata access. Storage paths and private file contents are never returned. */
 @RestController
-@Validated
 @RequestMapping("/admin/knowledge-bases")
 public class AdminKnowledgeController {
     private final KnowledgeBaseMapper bases;
@@ -57,16 +55,30 @@ public class AdminKnowledgeController {
     }
     @GetMapping("/{id}")
     public BaseView detail(@PathVariable Long id) { return view(base(id)); }
+    @GetMapping("/{id}/files/{fileId}")
+    public FileView file(@PathVariable Long id, @PathVariable Long fileId) {
+        base(id);
+        var file = files.selectByIdAndKnowledgeBaseId(fileId, id);
+        if (file == null) throw new ResponseStatusException(NOT_FOUND, "文件不存在");
+        return new FileView(String.valueOf(file.getId()), String.valueOf(id), file.getFileName(),
+                file.getFileSize(), normalize(file.getParseStatus()), file.getCreatedAt());
+    }
     @GetMapping("/{id}/files")
     public PageVO<FileView> files(@PathVariable Long id,
             @RequestParam(defaultValue="1") @Min(1) long page,
             @RequestParam(defaultValue="20") @Min(1) @Max(100) long size,
             @RequestParam(defaultValue="") @Size(max=100) String keyword,
-            @RequestParam(defaultValue="") @Size(max=32) String status) {
+            @RequestParam(defaultValue="") @Pattern(regexp="(?i)(|FAILED|PROCESSING|QUEUED|PENDING|COMPLETED|SUCCESS|READY)") String status) {
         base(id);
         var query=new QueryWrapper<KnowledgeFileEntity>().eq("knowledge_base_id",id);
         if (!keyword.isBlank()) query.like("file_name",keyword.trim());
-        if (!status.isBlank()) query.apply("UPPER(parse_status) = {0}",status.toUpperCase(Locale.ROOT));
+        if (!status.isBlank()) {
+            if ("COMPLETED".equals(normalize(status))) {
+                query.apply("UPPER(parse_status) IN ({0}, {1}, {2})", "COMPLETED", "SUCCESS", "READY");
+            } else {
+                query.apply("UPPER(parse_status) = {0}", status.toUpperCase(Locale.ROOT));
+            }
+        }
         query.orderByDesc("created_at").orderByDesc("id");
         var result=files.selectPage(Page.of(page,size),query);
         return new PageVO<>(result.getRecords().stream().map(f->new FileView(String.valueOf(f.getId()),
@@ -109,6 +121,10 @@ public class AdminKnowledgeController {
     private RetryResult result(FileUploadVO result) {
         return new RetryResult(String.valueOf(result.fileId()),result.ingestTaskId(),normalize(result.parseStatus()));
     }
-    private String normalize(String status) { return status == null ? "UNKNOWN" : status.toUpperCase(Locale.ROOT); }
+    private String normalize(String status) {
+        if (status == null) return "UNKNOWN";
+        var normalized = status.toUpperCase(Locale.ROOT);
+        return java.util.Set.of("COMPLETED", "SUCCESS", "READY").contains(normalized) ? "COMPLETED" : normalized;
+    }
     private void record(String action,Long id) { audit.record(CurrentUserUtils.currentUserId(),action,"KNOWLEDGE",String.valueOf(id)); }
 }
