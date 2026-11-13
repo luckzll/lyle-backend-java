@@ -28,4 +28,11 @@
         LIMIT 1
     </select>
 
+    <select id="selectByUsernameForUpdate" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM app_user
+        WHERE username = #{username}
+        LIMIT 1 FOR UPDATE
+    </select>
+
 </mapper>

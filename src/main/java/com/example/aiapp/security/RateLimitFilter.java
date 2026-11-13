@@ -88,9 +88,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
             HttpServletResponse response,
             FilterChain filterChain
     ) throws ServletException, IOException {
-        HttpServletRequest effectiveRequest = requiresAuthBody(request)
-                ? new BufferedRequest(request)
-                : request;
+        HttpServletRequest effectiveRequest;
+        try {
+            effectiveRequest = requiresAuthBody(request) ? new BufferedRequest(request) : request;
+        } catch (AuthBodyTooLargeException exception) {
+            response.setStatus(HttpStatus.PAYLOAD_TOO_LARGE.value());
+            response.setContentType("application/json;charset=UTF-8");
+            response.getWriter().write("{\"message\":\"登录请求过大，请检查后重试。\"}");
+            return;
+        }
         for (LimitKey limitKey : keys(effectiveRequest)) {
             if (!allow(limitKey.key(), limitKey.limit())) {
                 response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
@@ -115,7 +121,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 if (!email.isBlank()) keys.add(new LimitKey("auth:email:password:" + digest(email.toLowerCase(Locale.ROOT)),
                         positive(properties.loginUsernamePerMinute(), 10)));
             }
-        } else if (path.endsWith("/auth/login")) {
+        } else if (path.endsWith("/auth/login") || path.endsWith("/auth/admin/password/login")) {
             keys.add(new LimitKey("auth:login:ip:" + ip, positive(properties.authPerMinute(), 20)));
             String username = username(request);
             if (!username.isBlank()) {
@@ -201,7 +207,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         return "POST".equalsIgnoreCase(request.getMethod())
                 && (path.endsWith("/auth/login") || path.endsWith("/auth/register")
-                    || path.endsWith("/auth/email/password/login") || path.contains("/auth/captcha/"));
+                    || path.endsWith("/auth/email/password/login") || path.endsWith("/auth/admin/password/login")
+                    || path.contains("/auth/captcha/"));
     }
 
     private String refreshCookie(HttpServletRequest request) {
@@ -238,6 +245,12 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private record LimitKey(String key, int limit) {
     }
 
+    private static final class AuthBodyTooLargeException extends ServletException {
+        private AuthBodyTooLargeException() {
+            super("Authentication request body is too large");
+        }
+    }
+
     private static final class BufferedRequest extends HttpServletRequestWrapper {
         private final byte[] body;
 
@@ -245,7 +258,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
             super(request);
             byte[] content = request.getInputStream().readNBytes(MAX_AUTH_BODY_BYTES + 1);
             if (content.length > MAX_AUTH_BODY_BYTES) {
-                throw new ServletException("Authentication request body is too large");
+                throw new AuthBodyTooLargeException();
             }
             this.body = content;
         }
