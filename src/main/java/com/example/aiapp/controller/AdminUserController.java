@@ -14,7 +14,7 @@ public class AdminUserController {
     public AdminUserController(AdminUserService service){this.service=service;}
     @GetMapping public PageVO<AdminUserService.UserView> list(@RequestParam(defaultValue="1") @Min(1) long page,
             @RequestParam(defaultValue="20") @Min(1) @Max(100) long size,
-            @RequestParam(defaultValue="") @Size(max=100) String keyword,
+            @RequestParam(defaultValue="") @Size(max=254) String keyword,
             @RequestParam(defaultValue="") @Pattern(regexp="|ACTIVE|DISABLED") String status){return service.list(page,size,keyword,status);}
     @GetMapping("/{id}") public AdminUserService.UserView detail(@PathVariable long id){return service.detail(id);}
     @GetMapping("/{id}/credits") public AdminUserService.CreditView credits(@PathVariable long id){return service.credits(id);}

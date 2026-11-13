@@ -30,7 +30,7 @@ public class AdminUserService {
             BillingProperties properties,AuditLogService audit,JdbcTemplate jdbc){
         this.users=users;this.accounts=accounts;this.billing=billing;this.properties=properties;this.audit=audit;this.jdbc=jdbc;
     }
-    public record UserView(String id,String username,String role,String status,LocalDateTime createdAt,LocalDateTime lastLoginAt){}
+    public record UserView(String id,String username,String email,String role,String status,LocalDateTime createdAt,LocalDateTime lastLoginAt){}
     public record CreditView(boolean initialized,String status,String availableCreditMicros,String totalGrantedCreditMicros,String totalConsumedCreditMicros,LocalDateTime nextExpiryAt){}
     public record LedgerView(String id,String entryType,String direction,String creditMicros,String balanceAfterMicros,String sourceId,LocalDateTime occurredAt,LocalDateTime expiresAt,String reason){}
     public record GrantRequest(@NotBlank @Pattern(regexp="[A-Za-z0-9_-]{16,64}") String requestId,
@@ -38,13 +38,20 @@ public class AdminUserService {
             @Min(1) @Max(3650) Integer validityDays,@NotBlank @Size(max=512) String reason){}
     public PageVO<UserView> list(long page,long size,String keyword,String status){
         var query=new QueryWrapper<UserEntity>().select("id","username","role","status","created_at","last_login_at");
-        if(!keyword.isBlank())query.and(w->{w.like("username",keyword.trim());if(keyword.matches("[0-9]{1,19}"))w.or().eq("id",keyword);});
+        String search=keyword.trim();
+        if(!search.isBlank())query.and(w->{
+            w.like("username",search);
+            if(search.matches("[0-9]{1,19}"))w.or().eq("id",search);
+            // Email identities use ASCII; Unicode username searches must remain valid.
+            w.or().exists("SELECT 1 FROM auth_email_identity e WHERE e.user_id=app_user.id AND CONVERT(e.email USING utf8mb4) COLLATE utf8mb4_bin LIKE {0}","%"+search.toLowerCase(Locale.ROOT)+"%");
+        });
         if(!status.isBlank())query.eq("status",status);
         query.orderByDesc("created_at").orderByDesc("id");
         var result=users.selectPage(Page.of(page,size),query);
-        return new PageVO<>(result.getRecords().stream().map(this::view).toList(),result.getTotal(),page,size);
+        var emails=emails(result.getRecords());
+        return new PageVO<>(result.getRecords().stream().map(u->view(u,emails.get(u.getId()))).toList(),result.getTotal(),page,size);
     }
-    public UserView detail(long id){return view(requireUser(id));}
+    public UserView detail(long id){var user=requireUser(id);return view(user,emails(List.of(user)).get(id));}
     public CreditView credits(long userId){
         requireUser(userId);
         var account=accounts.selectAccountByUserId(userId,false);
@@ -83,7 +90,15 @@ public class AdminUserService {
         return credits(userId);
     }
     private UserEntity requireUser(long id){var user=users.selectAccountById(id);if(user==null)throw new ResponseStatusException(NOT_FOUND,"用户不存在");return user;}
-    private UserView view(UserEntity u){return new UserView(String.valueOf(u.getId()),u.getUsername(),u.getRole(),u.getStatus(),u.getCreatedAt(),u.getLastLoginAt());}
+    private Map<Long,String> emails(List<UserEntity> page){
+        if(page.isEmpty())return Map.of();
+        var ids=page.stream().map(UserEntity::getId).toArray();
+        var rows=jdbc.queryForList("SELECT user_id,email FROM auth_email_identity WHERE user_id IN ("+String.join(",",Collections.nCopies(ids.length,"?"))+")",ids);
+        Map<Long,String> result=new HashMap<>();
+        for(var row:rows)result.put(number(row.get("user_id")),(String)row.get("email"));
+        return result;
+    }
+    private UserView view(UserEntity u,String email){return new UserView(String.valueOf(u.getId()),u.getUsername(),email,u.getRole(),u.getStatus(),u.getCreatedAt(),u.getLastLoginAt());}
     private static long number(Object v){return v==null?0:((Number)v).longValue();}
     private static String str(Object v){return v==null?"0":String.valueOf(v);}
     private static LocalDateTime time(Object v){if(v==null)return null;if(v instanceof LocalDateTime t)return t;if(v instanceof java.sql.Timestamp t)return t.toLocalDateTime();return LocalDateTime.parse(String.valueOf(v).replace(' ','T'));}

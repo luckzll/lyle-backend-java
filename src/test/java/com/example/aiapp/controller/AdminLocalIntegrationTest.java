@@ -128,6 +128,31 @@ class AdminLocalIntegrationTest {
         assertThat(users.path("records").get(0).has("passwordHash")).isFalse();
     }
 
+    @Test void verifiedEmailsAppearInListAndDetailAndCanBeSearchedWithoutChangingAccounts() throws Exception {
+        String email="admin-contact-"+target+"@"+"e".repeat(63)+".example.com";
+        jdbc.update("INSERT INTO auth_email_identity (email,user_id,verified_at) VALUES (?,?,NOW())",email,target);
+        long disabled=addUser("USER","DISABLED");
+        jdbc.update("INSERT INTO auth_email_identity (email,user_id,verified_at) VALUES (?,?,NOW())","disabled-"+email,disabled);
+        var response=request("GET","/admin/users?keyword="+email.toUpperCase(java.util.Locale.ROOT)+"&status=ACTIVE",token,null);
+        assertThat(response.statusCode()).isEqualTo(200);
+        var matches=body(response);
+        assertThat(matches.path("total").asInt()).isEqualTo(1);
+        assertThat(matches.path("records").get(0).path("id").asText()).isEqualTo(String.valueOf(target));
+        assertThat(matches.path("records").get(0).path("email").asText()).isEqualTo(email);
+        var detail=body(request("GET","/admin/users/"+target,token,null));
+        assertThat(detail.path("email").asText()).isEqualTo(email);
+        assertThat(detail.has("passwordHash")).isFalse();
+        assertThat(body(request("GET","/admin/users/"+actor,token,null)).path("email").isNull()).isTrue();
+        jdbc.update("UPDATE app_user SET username=? WHERE id=?","邮箱查询验证-"+target,target);
+        String unicode=java.net.URLEncoder.encode("邮箱查询验证-"+target,java.nio.charset.StandardCharsets.UTF_8);
+        var byName=request("GET","/admin/users?keyword="+unicode,token,null);
+        assertThat(byName.statusCode()).isEqualTo(200);
+        assertThat(body(byName).path("records").get(0).path("email").asText()).isEqualTo(email);
+        String hostile=java.net.URLEncoder.encode("' OR 1=1 --",java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(body(request("GET","/admin/users?keyword="+hostile,token,null)).path("total").asInt()).isZero();
+        assertThat(accountCount()).isZero();
+    }
+
     @Test void concurrentRetriesCommitExactlyOneGrantLedgerEntryAndAudit() throws Exception {
         String requestId = UUID.randomUUID().toString();
         var payload = grant(requestId, 1_000_001L);
@@ -280,6 +305,7 @@ class AdminLocalIntegrationTest {
     @Test
     @EnabledIfEnvironmentVariable(named = "LYLE_ADMIN_IT_UI", matches = "true")
     void actualVueBrowserUsesTheJavaServerAndCommitsToTheIsolatedDatabase() throws Exception {
+        jdbc.update("INSERT INTO auth_email_identity (email,user_id,verified_at) VALUES (?,?,NOW())","integration-"+target+"@example.com",target);
         long base = IDS.incrementAndGet(), file = IDS.incrementAndGet();
         jdbc.update("INSERT INTO knowledge_base(id,user_id,name,created_at) VALUES(?,?,?,NOW())", base, target, "integration UI knowledge");
         jdbc.update("INSERT INTO knowledge_file(id,knowledge_base_id,file_name,storage_path,parse_status,created_at) VALUES(?,?,?,?,?,NOW())", file, base, "integration-ui.pdf", "integration-only-private-path", "failed");
