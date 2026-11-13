@@ -4,11 +4,13 @@
 
 |方法|路径|用途|
 |---|---|---|
-|GET|/admin/users|按 keyword（用户名或 ID）、status、page、size 查询用户；size 上限 100|
-|GET|/admin/users/{id}|用户基本信息，ID 为字符串，不返回密码、Token 等字段|
+|GET|/admin/users|按 keyword（用户名、绑定邮箱或 ID）、status、page、size 查询用户；keyword 上限 254，size 上限 100|
+|GET|/admin/users/{id}|用户基本信息与绑定邮箱，ID 为字符串，不返回密码、Token 等字段|
 |GET|/admin/users/{id}/credits|纯读取余额、累计授予、累计消耗和最近到期时间|
 |GET|/admin/users/{id}/ledger|最近 limit 条流水，limit 最大 100，支持 type 筛选|
 |POST|/admin/users/{id}/credits/grants|人工发放，body 含 requestId、creditMicros、validityDays、reason|
+
+用户列表及详情的 `email` 来自 `auth_email_identity` 已验证绑定；未绑定时为 null。列表按页批量查询邮箱，邮箱搜索忽略输入大小写，可与状态筛选和分页组合。手机号当前没有采集或绑定字段，不返回虚构数据；本次无需数据库迁移。
 
 ## 金额及单位
 

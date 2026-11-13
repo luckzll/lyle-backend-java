@@ -47,7 +47,7 @@ class AdminAccessSecurityTest {
     }
 
     @Test void anonymousAndRegularUsersCannotReadOrMutateAdminResources() throws Exception {
-        for (String path : List.of("/admin/users", "/admin/users/7/credits", "/admin/users/7/ledger", "/admin/knowledge-bases", "/admin/knowledge-bases/10/files")) {
+        for (String path : List.of("/admin/users", "/admin/users/7", "/admin/users/7/credits", "/admin/users/7/ledger", "/admin/knowledge-bases", "/admin/knowledge-bases/10/files")) {
             mvc.perform(get(path)).andExpect(status().isUnauthorized());
             mvc.perform(get(path).header("Authorization", token("USER"))).andExpect(status().isForbidden());
         }
@@ -61,15 +61,16 @@ class AdminAccessSecurityTest {
 
     @Test void administratorQueriesKeepIdsAsStringsAndExposeOnlyPublicMetadata() throws Exception {
         when(users.list(2, 20, "test", "ACTIVE")).thenReturn(new PageVO<>(List.of(
-                new AdminUserService.UserView("999999999999999999", "test", "USER", "ACTIVE", null, null)), 21, 2, 20));
+                new AdminUserService.UserView("999999999999999999", "test", "test@example.com", "USER", "ACTIVE", null, null)), 21, 2, 20));
         mvc.perform(get("/admin/users").param("page", "2").param("keyword", "test").param("status", "ACTIVE")
                         .header("Authorization", token("ADMIN")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.records[0].id").value("999999999999999999"))
+                .andExpect(jsonPath("$.records[0].email").value("test@example.com"))
                 .andExpect(jsonPath("$.records[0].passwordHash").doesNotExist());
     }
 
     @Test void invalidPaginationAndFiltersAreBadRequestsBeforeAnyDataAccess() throws Exception {
-        for (String query : List.of("page=0", "size=101", "status=UNKNOWN")) {
+        for (String query : List.of("page=0", "size=101", "status=UNKNOWN", "keyword=" + "a".repeat(255))) {
             mvc.perform(get("/admin/users?" + query).header("Authorization", token("ADMIN")))
                     .andExpect(status().isBadRequest());
         }
