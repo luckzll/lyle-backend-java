@@ -50,6 +50,7 @@ public class SecurityConfig {
                                 "/auth/email/code",
                                 "/auth/email/login",
                                 "/auth/email/password/login",
+                                "/auth/admin/password/login",
                                 "/auth/email/password/code",
                                 "/auth/email/password/reset",
                                 "/auth/refresh"

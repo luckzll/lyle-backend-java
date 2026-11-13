@@ -20,6 +20,8 @@ public interface AuthService {
 
     AuthenticatedSession login(AuthRequestDTO request, String userAgent, String remoteAddress);
 
+    AuthenticatedSession loginAdministrator(AuthRequestDTO request, String userAgent, String remoteAddress);
+
     default AuthResponseVO login(AuthRequestDTO request) {
         return login(request, null, null).response();
     }

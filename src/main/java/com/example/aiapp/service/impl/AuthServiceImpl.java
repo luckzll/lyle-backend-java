@@ -108,9 +108,27 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public AuthenticatedSession login(AuthRequestDTO request, String userAgent, String remoteAddress) {
-        UserEntity entity = userMapper.selectByUsername(request.username());
+        return authenticate(request, userAgent, remoteAddress, false);
+    }
+
+    @Override
+    @Transactional
+    public AuthenticatedSession loginAdministrator(AuthRequestDTO request, String userAgent, String remoteAddress) {
+        if (request.password() == null || request.password().isBlank()
+                || request.password().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72) {
+            throw new ResponseStatusException(UNAUTHORIZED, "用户名或密码不正确，请重试。");
+        }
+        return authenticate(request, userAgent, remoteAddress, true);
+    }
+
+    private AuthenticatedSession authenticate(AuthRequestDTO request, String userAgent, String remoteAddress,
+            boolean administratorOnly) {
+        // Serialize administrator login with password maintenance and role/session revocation.
+        UserEntity entity = administratorOnly ? userMapper.selectByUsernameForUpdate(request.username())
+                : userMapper.selectByUsername(request.username());
         if (entity == null
                 || !"ACTIVE".equalsIgnoreCase(entity.getStatus())
+                || (administratorOnly && !"ADMIN".equals(entity.getRole()))
                 || !matches(request.password(), entity.getPasswordHash())) {
             throw new ResponseStatusException(UNAUTHORIZED, "用户名或密码不正确，请重试。");
         }
