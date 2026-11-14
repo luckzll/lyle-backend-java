@@ -30,6 +30,8 @@ public interface CommercialAccountMapper extends BaseMapper<CommercialAccountEnt
     /** 汇总账户累计消耗额度。 */
     Long sumConsumedCredits(@Param("accountId") long accountId);
 
+    Long sumAdminDeductedCredits(@Param("accountId") long accountId);
+
     /** 查询当前可用额度。 */
     Long sumAvailableCredits(@Param("accountId") long accountId);
 
@@ -164,6 +166,13 @@ public interface CommercialAccountMapper extends BaseMapper<CommercialAccountEnt
                                @Param("idempotencyKey") String idempotencyKey,
                                @Param("occurredAt") LocalDateTime occurredAt, @Param("expiresAt") Object expiresAt,
                                @Param("metadataJson") String metadataJson);
+
+    int insertAdminDebitLedger(@Param("id") long id, @Param("accountId") long accountId,
+                              @Param("grantId") long grantId, @Param("creditMicros") long creditMicros,
+                              @Param("balanceAfterMicros") long balanceAfterMicros,
+                              @Param("requestId") String requestId, @Param("idempotencyKey") String idempotencyKey,
+                              @Param("occurredAt") LocalDateTime occurredAt, @Param("expiresAt") Object expiresAt,
+                              @Param("metadataJson") String metadataJson);
 
     /** 查询当前生效主套餐。 */
     Map<String, Object> selectCurrentPlan(@Param("userId") long userId);

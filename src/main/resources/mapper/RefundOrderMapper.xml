@@ -110,6 +110,10 @@
         WHERE id = #{id}
     </update>
 
+    <select id="lockOrderAccount" resultType="java.lang.Long">
+        SELECT a.id FROM billing_order o JOIN commercial_account a ON a.id=o.account_id
+        WHERE o.order_no=#{orderNo} FOR UPDATE
+    </select>
     <select id="selectOrderGrantsForUpdate" resultType="java.util.LinkedHashMap">
         SELECT *
         FROM entitlement_grant

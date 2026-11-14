@@ -15,6 +15,7 @@ import java.util.Map;
  */
 @Mapper
 public interface RefundOrderMapper extends BaseMapper<RefundOrderEntity> {
+    Long lockOrderAccount(@Param("orderNo") String orderNo);
 
     /** 查询用户的退款记录及对应订单快照。 */
     List<BillingRefundReadVO> selectUserRefunds(@Param("userId") long userId);

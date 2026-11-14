@@ -117,8 +117,12 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void expireGrant(long grantId) {
+        Map<String, Object> initial = commercialAccountMapper.selectGrantById(grantId, false);
+        if (initial == null) return;
+        // All balance mutations lock the account before its grants and ledger FKs.
+        commercialAccountMapper.lockAccountById(number(initial.get("account_id")));
         Map<String, Object> grant = commercialAccountMapper.selectGrantById(grantId, true);
         if (grant == null) {
             return;
@@ -149,9 +153,10 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void fulfillOrder(String orderNo) {
         Map<String, Object> order = requireOrder(orderNo, true);
+        commercialAccountMapper.lockAccountById(number(order.get("account_id")));
         String status = normalize(String.valueOf(order.get("status")));
         if ("FULFILLED".equals(status)) {
             markOutboxProcessed(orderNo, "FULFILL_ORDER");
@@ -206,7 +211,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public String reserveCommercial(long userId, String turnId) {
         if (!properties.ledgerEnabled()
                 || properties.settlementShadowEnabled()
@@ -250,7 +255,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     }
 
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.READ_COMMITTED)
     public void settleUsage(UsageEventRequest event) {
         settleUsageInternal(event);
     }
@@ -333,7 +338,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     }
 
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.READ_COMMITTED)
     public void settleUsageEvent(String eventId) {
         Map<String, Object> row = commercialAccountMapper.selectUsageEvent(safe(eventId, 64));
         if (row != null) {
@@ -370,7 +375,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> grantManualCredits(
             long userId,
             BillingRequests.GrantCredits request
@@ -380,7 +385,7 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void grantAdminCredits(long userId,BillingRequests.GrantCredits request) {
         Map<String, Object> account = ensureAccount(userId);
         // Serialize grants with other mutations of the account so each ledger
@@ -408,11 +413,39 @@ public class BillingAccountServiceImpl implements BillingAccountService {
     private Map<String, Object> ensureAccount(long userId) {
         Map<String, Object> existing = commercialAccountMapper.selectAccountByUserId(userId, false);
         if (existing != null) {
+            commercialAccountMapper.lockAccountById(number(existing.get("id")));
             return existing;
         }
         LocalDateTime now = LocalDateTime.now();
         commercialAccountMapper.insertAccountIgnore(nextId(), userId, now);
         return commercialAccountMapper.selectAccountByUserId(userId, true);
+    }
+
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void deductAdminCredits(long userId, String requestId, long creditMicros, String reason) {
+        if (creditMicros <= 0 || creditMicros > 9_000_000_000_000_000L) throw badRequest("扣减数量超出允许范围。");
+        var account = commercialAccountMapper.selectAccountByUserId(userId, true);
+        if (account == null || !"ACTIVE".equals(String.valueOf(account.get("status"))))
+            throw conflict("额度账户尚未开通或不可用，不能扣减。");
+        long accountId = number(account.get("id"));
+        var grants = commercialAccountMapper.selectSpendableGrantsForUpdate(accountId);
+        long available = grants.stream().mapToLong(row -> number(row.get("remaining_micros"))).sum();
+        long reserved = zeroIfNull(commercialAccountMapper.sumActiveReservationCredits(accountId));
+        if (available < creditMicros || available - creditMicros < reserved)
+            throw conflict("可扣减额度不足；正在使用的预留额度不能扣减，请刷新后重试。");
+        long remaining = creditMicros;
+        for (var grant : grants) {
+            if (remaining == 0) break;
+            long debit = Math.min(remaining, number(grant.get("remaining_micros")));
+            var now = LocalDateTime.now();
+            if (commercialAccountMapper.decrementGrant(number(grant.get("id")), debit, now) != 1)
+                throw conflict("额度已变化，请刷新后重试。");
+            commercialAccountMapper.insertAdminDebitLedger(nextId(), accountId, number(grant.get("id")), debit,
+                    availableCredits(accountId), requestId, "ADMIN_DEDUCTION:" + requestId + ":" + grant.get("id"),
+                    now, grant.get("expires_at"), json(Map.of("reason", reason)));
+            remaining -= debit;
+        }
     }
 
     private void grantWelcomeCredits(long accountId, long userId) {
