@@ -22,4 +22,6 @@ public class AdminUserController {
             @RequestParam(defaultValue="") @Size(max=64) String type,@RequestParam(defaultValue="50") @Min(1) @Max(100) int limit){return service.ledger(id,type,limit);}
     @PostMapping("/{id}/credits/grants") public AdminUserService.CreditView grant(@PathVariable long id,
             @Valid @RequestBody AdminUserService.GrantRequest request){return service.grant(CurrentUserUtils.currentUserId(),id,request);}
+    @PostMapping("/{id}/credits/deductions") public AdminUserService.CreditView deduct(@PathVariable long id,
+            @Valid @RequestBody AdminUserService.DeductRequest request){return service.deduct(CurrentUserUtils.currentUserId(),id,request);}
 }

@@ -40,4 +40,5 @@ public interface BillingAccountService {
     Map<String, Object> grantManualCredits(long userId, BillingRequests.GrantCredits request);
     /** Administrative grant without triggering user-facing welcome-credit initialization. */
     void grantAdminCredits(long userId, BillingRequests.GrantCredits request);
+    void deductAdminCredits(long userId, String requestId, long creditMicros, String reason);
 }

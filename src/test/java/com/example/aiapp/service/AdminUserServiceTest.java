@@ -20,7 +20,7 @@ class AdminUserServiceTest {
     final AdminUserService service=new AdminUserService(users,accounts,billing,properties,audit,jdbc);
     final AdminUserService.GrantRequest request=new AdminUserService.GrantRequest("operation-test-0001",1000000L,30,"业务测试");
     void user(){var u=new UserEntity();u.setId(7L);u.setStatus("ACTIVE");when(users.selectAccountById(7L)).thenReturn(u);when(accounts.selectAccountByUserId(7L,false)).thenReturn(null);}
-    Map<String,Object> row(String status){return Map.of("actor_id",99L,"user_id",7L,"credit_micros",1000000L,"validity_days",30,"reason","业务测试","status",status);}
+    Map<String,Object> row(String status){return Map.of("actor_id",99L,"user_id",7L,"operation_type","GRANT","credit_micros",1000000L,"validity_days",30,"reason","业务测试","status",status);}
     @Test void viewingUninitializedCreditsOrLedgerNeverCreatesAccountOrWelcomeGrant(){
         user();assertThat(service.credits(7).initialized()).isFalse();assertThat(service.ledger(7,"",100)).isEmpty();
         verifyNoInteractions(billing,jdbc,audit);verify(accounts,never()).insertAccountIgnore(anyLong(),anyLong(),any());

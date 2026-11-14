@@ -21,8 +21,8 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@WebMvcTest(controllers = {AdminUserController.class, AdminKnowledgeController.class})
-@ContextConfiguration(classes = {AdminUserController.class, AdminKnowledgeController.class, SecurityConfig.class,
+@WebMvcTest(controllers = {AdminUserController.class, AdminCreditController.class, AdminKnowledgeController.class})
+@ContextConfiguration(classes = {AdminUserController.class, AdminCreditController.class, AdminKnowledgeController.class, SecurityConfig.class,
         JwtService.class, JwtAuthenticationFilter.class, RateLimitFilter.class})
 @EnableConfigurationProperties({AuthProperties.class, RateLimitProperties.class, RedisProperties.class})
 @TestPropertySource(properties = {
@@ -47,12 +47,15 @@ class AdminAccessSecurityTest {
     }
 
     @Test void anonymousAndRegularUsersCannotReadOrMutateAdminResources() throws Exception {
-        for (String path : List.of("/admin/users", "/admin/users/7", "/admin/users/7/credits", "/admin/users/7/ledger", "/admin/knowledge-bases", "/admin/knowledge-bases/10/files")) {
+        for (String path : List.of("/admin/credits", "/admin/users", "/admin/users/7", "/admin/users/7/credits", "/admin/users/7/ledger", "/admin/knowledge-bases", "/admin/knowledge-bases/10/files")) {
             mvc.perform(get(path)).andExpect(status().isUnauthorized());
             mvc.perform(get(path).header("Authorization", token("USER"))).andExpect(status().isForbidden());
         }
         mvc.perform(post("/admin/users/7/credits/grants").header("Authorization", token("USER"))
                 .contentType(MediaType.APPLICATION_JSON).content(grantBody(1)))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/admin/users/7/credits/deductions").header("Authorization", token("USER"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"requestId\":\"admin-deduct-test-001\",\"creditMicros\":1,\"reason\":\"correction\"}"))
                 .andExpect(status().isForbidden());
         mvc.perform(post("/admin/knowledge-bases/10/files/3/rebuild").header("Authorization", token("USER")))
                 .andExpect(status().isForbidden());
@@ -80,7 +83,7 @@ class AdminAccessSecurityTest {
     }
 
     @Test void validGrantUsesTheAuthenticatedAdministratorAndRejectsInvalidQuantities() throws Exception {
-        when(users.grant(eq(99L), eq(7L), any())).thenReturn(new AdminUserService.CreditView(true, "ACTIVE", "1", "1", "0", null));
+        when(users.grant(eq(99L), eq(7L), any())).thenReturn(new AdminUserService.CreditView(true, "ACTIVE", "1", "1", "0", null,"0","1","0"));
         mvc.perform(post("/admin/users/7/credits/grants").header("Authorization", token("ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON).content(grantBody(1)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.availableCreditMicros").value("1"));

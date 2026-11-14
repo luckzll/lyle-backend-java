@@ -40,6 +40,10 @@
         SELECT COALESCE(SUM(credit_micros), 0) FROM commercial_ledger_entry
         WHERE account_id = #{accountId} AND entry_type = 'USAGE_DEBIT'
     </select>
+    <select id="sumAdminDeductedCredits" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(credit_micros), 0) FROM commercial_ledger_entry
+        WHERE account_id = #{accountId} AND entry_type = 'ADMIN_DEDUCTION' AND direction = 'DEBIT'
+    </select>
     <select id="sumAvailableCredits" resultType="java.lang.Long">
         SELECT COALESCE(SUM(remaining_micros), 0) FROM entitlement_grant
         WHERE account_id = #{accountId} AND status = 'ACTIVE' AND remaining_micros &gt; 0
@@ -225,6 +229,16 @@
             occurred_at, expires_at, metadata_json, created_at
         ) VALUES (#{id}, #{accountId}, #{grantId}, 'USAGE_DEBIT', 'DEBIT', #{creditMicros},
                   #{balanceAfterMicros}, 'USAGE_EVENT', #{usageEventId}, #{idempotencyKey},
+                  #{occurredAt}, #{expiresAt}, #{metadataJson}, #{occurredAt})
+    </insert>
+
+    <insert id="insertAdminDebitLedger">
+        INSERT INTO commercial_ledger_entry (
+            id, account_id, grant_id, entry_type, direction, credit_micros,
+            balance_after_micros, source_type, source_id, idempotency_key,
+            occurred_at, expires_at, metadata_json, created_at
+        ) VALUES (#{id}, #{accountId}, #{grantId}, 'ADMIN_DEDUCTION', 'DEBIT', #{creditMicros},
+                  #{balanceAfterMicros}, 'OPERATOR', #{requestId}, #{idempotencyKey},
                   #{occurredAt}, #{expiresAt}, #{metadataJson}, #{occurredAt})
     </insert>
 

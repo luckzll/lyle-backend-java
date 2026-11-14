@@ -182,6 +182,7 @@ public class BillingRefundServiceImpl implements BillingRefundService {
             PaymentGateway.RefundResult result
     ) {
         String orderNo = String.valueOf(refund.get("order_no"));
+        refundOrderMapper.lockOrderAccount(orderNo);
         List<Map<String, Object>> grants = refundOrderMapper.selectOrderGrantsForUpdate(orderNo);
         for (Map<String, Object> grant : grants) {
             long remaining = number(grant.get("remaining_micros"));

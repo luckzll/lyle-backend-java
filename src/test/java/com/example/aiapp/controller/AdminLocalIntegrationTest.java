@@ -117,6 +117,9 @@ class AdminLocalIntegrationTest {
 
     @Test void migrationAndReadOnlyQueriesDoNotCreateAccountsOrWelcomeGrants() throws Exception {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM flyway_schema_history WHERE version='34' AND success=1", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM flyway_schema_history WHERE version='35' AND success=1",Integer.class)).isEqualTo(1);
+        var creditList=body(request("GET","/admin/credits?keyword="+target,token,null));
+        assertThat(creditList.path("records").get(0).path("credit").path("initialized").asBoolean()).isFalse();
         var result = request("GET", "/admin/users/" + target + "/credits", token, null);
         assertThat(result.statusCode()).isEqualTo(200);
         assertThat(body(result).path("initialized").asBoolean()).isFalse();
@@ -325,8 +328,90 @@ class AdminLocalIntegrationTest {
             throw new IllegalStateException("Browser integration timed out; inspect " + log);
         }
         assertThat(process.exitValue()).withFailMessage("Browser integration failed: %s", Files.readString(log)).isZero();
-        assertThat(jdbc.queryForObject("SELECT SUM(g.remaining_micros) FROM entitlement_grant g JOIN commercial_account a ON a.id=g.account_id WHERE a.user_id=?", Long.class, target)).isEqualTo(1_250_000L);
+        assertThat(jdbc.queryForObject("SELECT SUM(g.remaining_micros) FROM entitlement_grant g JOIN commercial_account a ON a.id=g.account_id WHERE a.user_id=?", Long.class, target)).isEqualTo(1_000_000L);
         assertThat(jdbc.queryForObject("SELECT name FROM knowledge_base WHERE id=?", String.class, base)).isEqualTo("local UI renamed knowledge");
+    }
+
+    private Map<String,Object> deduction(String requestId,long amount) {
+        return Map.of("requestId",requestId,"creditMicros",amount,"reason","integration correction");
+    }
+    private String creditsPath() { return "/admin/users/"+target+"/credits"; }
+    @Test void deductionsAreIdempotentAndSeparateFromUsageAndGrantRequests() throws Exception {
+        String grantId=UUID.randomUUID().toString();
+        assertThat(request("POST",creditsPath()+"/grants",token,grant(grantId,1_000_001)).statusCode()).isEqualTo(200);
+        var payload=deduction(UUID.randomUUID().toString(),250_001);
+        var pool=Executors.newFixedThreadPool(6);
+        try {
+            List<Callable<HttpResponse<String>>> tasks=new ArrayList<>();
+            for(int i=0;i<6;i++)tasks.add(()->request("POST",creditsPath()+"/deductions",token,payload));
+            for(var future:pool.invokeAll(tasks))assertThat(future.get().statusCode()).isEqualTo(200);
+        } finally { pool.shutdownNow(); }
+        var credit=body(request("GET",creditsPath(),token,null));
+        assertThat(credit.path("availableCreditMicros").asText()).isEqualTo("750000");
+        assertThat(credit.path("totalGrantedCreditMicros").asText()).isEqualTo("1000001");
+        assertThat(credit.path("totalDeductedCreditMicros").asText()).isEqualTo("250001");
+        assertThat(credit.path("totalConsumedCreditMicros").asText()).isEqualTo("0");
+        var entries=body(request("GET","/admin/users/"+target+"/ledger?type=ADMIN_DEDUCTION",token,null));
+        assertThat(entries.size()).isEqualTo(1);
+        assertThat(entries.get(0).path("reason").asText()).isEqualTo("integration correction");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM audit_log WHERE action='ADMIN_CREDIT_DEDUCT' AND target_id=?",Integer.class,String.valueOf(target))).isEqualTo(1);
+        assertThat(request("POST",creditsPath()+"/deductions",token,deduction(grantId,1_000_001)).statusCode()).isEqualTo(409);
+        assertThat(request("POST",creditsPath()+"/grants",token,grant((String)payload.get("requestId"),250_001)).statusCode()).isEqualTo(409);
+        var list=body(request("GET","/admin/credits?keyword="+target,token,null));
+        assertThat(list.path("records").get(0).path("credit")).isEqualTo(credit);
+        assertThat(request("GET","/admin/credits",access(target,"USER"),null).statusCode()).isEqualTo(403);
+        assertThat(request("POST",creditsPath()+"/deductions",access(target,"USER"),deduction(UUID.randomUUID().toString(),1)).statusCode()).isEqualTo(403);
+    }
+    @Test void deductionsProtectReservationsAndRejectUninitializedDisabledAndInsufficientAccounts() throws Exception {
+        assertThat(request("POST",creditsPath()+"/deductions",token,deduction(UUID.randomUUID().toString(),1)).statusCode()).isEqualTo(409);
+        assertThat(accountCount()).isZero();
+        assertThat(request("POST",creditsPath()+"/grants",token,grant(UUID.randomUUID().toString(),100)).statusCode()).isEqualTo(200);
+        long account=jdbc.queryForObject("SELECT id FROM commercial_account WHERE user_id=?",Long.class,target);
+        jdbc.update("INSERT INTO commercial_reservation(id,account_id,user_id,turn_id,reserved_credit_micros,consumed_credit_micros,status,expires_at,created_at,updated_at) VALUES(?,?,?,?,80,0,'ACTIVE',DATE_ADD(NOW(),INTERVAL 1 DAY),NOW(),NOW())",IDS.incrementAndGet(),account,target,UUID.randomUUID().toString());
+        var rejected=deduction(UUID.randomUUID().toString(),21);
+        assertThat(request("POST",creditsPath()+"/deductions",token,rejected).statusCode()).isEqualTo(409);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM admin_credit_operation WHERE request_id=?",Integer.class,rejected.get("requestId"))).isZero();
+        assertThat(body(request("GET",creditsPath(),token,null)).path("deductibleCreditMicros").asText()).isEqualTo("20");
+        assertThat(request("POST",creditsPath()+"/deductions",token,deduction(UUID.randomUUID().toString(),20)).statusCode()).isEqualTo(200);
+        assertThat(body(request("GET",creditsPath(),token,null)).path("availableCreditMicros").asText()).isEqualTo("80");
+        jdbc.update("UPDATE app_user SET status='DISABLED' WHERE id=?",target);
+        assertThat(request("POST",creditsPath()+"/deductions",token,deduction(UUID.randomUUID().toString(),1)).statusCode()).isEqualTo(409);
+    }
+    @Test void simultaneousDeductionsCannotOverdrawAndAuditFailureRollsBack() throws Exception {
+        assertThat(request("POST",creditsPath()+"/grants",token,grant(UUID.randomUUID().toString(),100)).statusCode()).isEqualTo(200);
+        doThrow(new IllegalStateException("integration rollback")).when(audit).record(eq(actor),eq("ADMIN_CREDIT_DEDUCT"),eq("USER"),eq(String.valueOf(target)));
+        String failed=UUID.randomUUID().toString();
+        assertThat(request("POST",creditsPath()+"/deductions",token,deduction(failed,1)).statusCode()).isEqualTo(500);
+        assertThat(body(request("GET",creditsPath(),token,null)).path("availableCreditMicros").asText()).isEqualTo("100");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM admin_credit_operation WHERE request_id=?",Integer.class,failed)).isZero();
+        org.mockito.Mockito.reset(audit);
+        var pool=Executors.newFixedThreadPool(2);
+        try {
+            List<Callable<Integer>> tasks=List.of(
+                ()->request("POST",creditsPath()+"/deductions",token,deduction(UUID.randomUUID().toString(),80)).statusCode(),
+                ()->request("POST",creditsPath()+"/deductions",token,deduction(UUID.randomUUID().toString(),80)).statusCode());
+            var results=pool.invokeAll(tasks);
+            assertThat(List.of(results.get(0).get(),results.get(1).get())).containsExactlyInAnyOrder(200,409);
+        } finally { pool.shutdownNow(); }
+        assertThat(body(request("GET",creditsPath(),token,null)).path("availableCreditMicros").asText()).isEqualTo("20");
+    }
+
+    @Test void deductionsSpendEarliestExpiryAndExcludeExpiredAndFutureGrants() throws Exception {
+        List<String> ids=new ArrayList<>();
+        for(long amount:List.of(10L,20L,30L,40L)) {
+            String id=UUID.randomUUID().toString();ids.add(id);
+            assertThat(request("POST",creditsPath()+"/grants",token,grant(id,amount)).statusCode()).isEqualTo(200);
+        }
+        jdbc.update("UPDATE entitlement_grant SET expires_at=DATE_SUB(NOW(),INTERVAL 1 DAY) WHERE source_id=?",ids.get(0));
+        jdbc.update("UPDATE entitlement_grant SET valid_from=DATE_ADD(NOW(),INTERVAL 1 DAY) WHERE source_id=?",ids.get(3));
+        jdbc.update("UPDATE entitlement_grant SET expires_at=DATE_ADD(NOW(),INTERVAL 1 DAY) WHERE source_id=?",ids.get(2));
+        assertThat(body(request("GET",creditsPath(),token,null)).path("availableCreditMicros").asText()).isEqualTo("50");
+        assertThat(request("POST",creditsPath()+"/deductions",token,deduction(UUID.randomUUID().toString(),35)).statusCode()).isEqualTo(200);
+        assertThat(jdbc.queryForObject("SELECT remaining_micros FROM entitlement_grant WHERE source_id=?",Long.class,ids.get(2))).isZero();
+        assertThat(jdbc.queryForObject("SELECT remaining_micros FROM entitlement_grant WHERE source_id=?",Long.class,ids.get(1))).isEqualTo(15);
+        assertThat(jdbc.queryForObject("SELECT remaining_micros FROM entitlement_grant WHERE source_id=?",Long.class,ids.get(0))).isEqualTo(10);
+        assertThat(jdbc.queryForObject("SELECT remaining_micros FROM entitlement_grant WHERE source_id=?",Long.class,ids.get(3))).isEqualTo(40);
+        assertThat(body(request("GET",creditsPath(),token,null)).path("totalDeductedCreditMicros").asText()).isEqualTo("35");
     }
 
     private int accountCount() {
